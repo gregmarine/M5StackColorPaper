@@ -205,10 +205,27 @@ measured palette (*Match inks: calibrated* in the Photo Lab,
 table so the firmware addresses the same inks. The measured black is lighter
 than reality because of camera flare; treat it as approximate.
 
+Eighth round, butterfly again with the Foliage preset:
+
+| Variant | Settings | Verdict |
+|---------|----------|---------|
+| R | driver table | still closest |
+| S | default | not right |
+| T | Foliage (saturation 1.3) | not right |
+
+Conclusion: this photo is the outlier, not the settings. Its background is
+entirely out of focus, and smooth bokeh has no structure for a dither to
+hold on to, so it turns to mush with any palette. Photos with sharp subjects
+and defined edges suit the panel; this one is better enjoyed elsewhere. If
+it ever matters, the direction to try is treating the bokeh differently
+from the subject (heavier blur or fewer levels in the background), not more
+palette work.
+
 ## Open ideas
 
-- **Verify calibrated matching on the panel.** It should reduce the need for
-  the blue boost and chroma weight; the sky preset may want retuning.
+- **Background-aware processing** for bokeh-heavy photos (see the butterfly
+  rounds): blur or posterise smooth regions harder than the subject so the
+  dither has less noise to chase.
 - **Hue-aware green handling.** Sunlit grass could be steered toward
   green+yellow+white mixes rather than pure yellow with a hue-band penalty.
 - **Gamut mapping before dithering.** Compress out-of-gamut colours toward
