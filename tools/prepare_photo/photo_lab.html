@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PaperColor Photo Lab</title>
+<style>
+  :root {
+    --bg: #f3f2ee; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #d9d7d0;
+    --accent: #2f5fd6; --accent-ink: #ffffff; --warn: #a33;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 13px; color: var(--ink);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  main { flex: 1; display: flex; min-height: 0; }
+  aside { width: 340px; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 8px 12px 40px; }
+  #stage { flex: 1; overflow: auto; padding: 16px; display: flex; gap: 20px; align-items: flex-start; flex-wrap: nowrap; }
+  .pane { display: flex; flex-direction: column; gap: 6px; }
+  .pane .cap { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .pane canvas { background: #fff; border: 1px solid var(--line); box-shadow: 0 1px 4px rgba(0,0,0,.08); display: block; }
+  canvas.pixelated { image-rendering: pixelated; }
+  details { border-top: 1px solid var(--line); padding: 6px 0; }
+  details:first-of-type { border-top: 0; }
+  summary { cursor: pointer; font-weight: 600; padding: 4px 0; user-select: none; }
+  .row { display: grid; grid-template-columns: 110px 1fr 52px; align-items: center; gap: 6px; margin: 4px 0; }
+  .row label { color: var(--ink); }
+  .row input[type=range] { width: 100%; margin: 0; }
+  .row .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .row select, .row input[type=text] { width: 100%; font: inherit; padding: 3px 4px; }
+  .row input[type=color] { width: 40px; height: 22px; padding: 0; border: 1px solid var(--line); background: none; }
+  .row.wide { grid-template-columns: 110px 1fr; }
+  .hint { color: var(--muted); font-size: 12px; margin: 2px 0 6px; line-height: 1.35; }
+  button, .btn { font: inherit; padding: 5px 10px; border: 1px solid var(--line); background: #fafaf8; border-radius: 4px; cursor: pointer; color: var(--ink); }
+  button:hover { background: #f0efea; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.primary:hover { background: #2750b8; }
+  button:disabled { opacity: .5; cursor: default; }
+  .btns { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+  select#photoList, select#presetSel { font: inherit; padding: 4px 6px; max-width: 260px; }
+  #status { color: var(--muted); font-size: 12px; min-width: 200px; }
+  #status.err { color: var(--warn); }
+  #usage { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+  #usage span { display: inline-flex; align-items: center; gap: 4px; }
+  #usage i { display: inline-block; width: 10px; height: 10px; border: 1px solid #0003; }
+  #drop { position: fixed; inset: 0; background: rgba(47,95,214,.12); border: 4px dashed var(--accent); display: none; align-items: center; justify-content: center; font-size: 20px; color: var(--accent); pointer-events: none; }
+  #drop.on { display: flex; }
+  .swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 4px 0; }
+  .swatches label { display: flex; flex-direction: column; align-items: center; font-size: 11px; color: var(--muted); gap: 2px; }
+  .swatches input[type=color] { width: 100%; height: 26px; padding: 0; border: 1px solid var(--line); }
+  .modified { color: var(--warn); font-size: 12px; }
+  kbd { font: inherit; background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PaperColor Photo Lab</h1>
+  <input type="file" id="fileIn" accept="image/*,.heic,.heif" multiple>
+  <select id="photoList" title="Loaded photos"></select>
+  <span class="spacer"></span>
+  <span id="status">Drop photos anywhere, or use the file picker.</span>
+  <button id="saveBtn" class="primary" disabled>Save BMP</button>
+</header>
+<main>
+  <aside>
+    <details open>
+      <summary>Preset</summary>
+      <div class="btns">
+        <select id="presetSel"></select>
+        <span id="presetMod" class="modified"></span>
+      </div>
+      <div class="btns">
+        <button id="presetSaveAs">Save as new…</button>
+        <button id="presetUpdate">Update</button>
+        <button id="presetDelete">Delete</button>
+      </div>
+      <div class="btns">
+        <button id="presetExport">Export JSON</button>
+        <button id="presetImport">Import JSON</button>
+        <input type="file" id="presetFile" accept=".json" hidden>
+      </div>
+      <div class="hint">Built-in presets are starting points. Tweak anything below, then <b>Save as new</b> to keep it. Presets live in this browser; export to a file to share or commit them.</div>
+    </details>
+
+    <details open>
+      <summary>Crop &amp; geometry</summary>
+      <div class="row"><label>Fit</label><select data-p="fit"><option value="cover">cover (crop to fill)</option><option value="contain">contain (letterbox)</option></select><span></span></div>
+      <div class="row"><label>Anchor</label><input type="range" data-p="anchor" min="0" max="1" step="0.05"><span class="val"></span></div>
+      <div class="hint">Anchor: which part to keep along the cropped axis. 0 = top/left, 0.5 = centre, 1 = bottom/right.</div>
+      <div class="row"><label>Orientation</label><select data-p="orientation"><option value="auto">auto (match photo)</option><option value="portrait">portrait 400x600</option><option value="landscape">landscape 600x400</option></select><span></span></div>
+    </details>
+
+    <details open>
+      <summary>Tone</summary>
+      <div class="row"><label>Smooth</label><input type="range" data-p="smooth" min="0" max="2" step="0.1"><span class="val"></span></div>
+      <div class="row"><label>Auto levels</label><select data-p="autoLevels"><option value="1">on (1% stretch)</option><option value="0">off</option></select><span></span></div>
+      <div class="row"><label>Gamma</label><input type="range" data-p="gamma" min="0.6" max="2.4" step="0.05"><span class="val"></span></div>
+      <div class="row"><label>Brightness</label><input type="range" data-p="brightness" min="0.5" max="1.6" step="0.01"><span class="val"></span></div>
+      <div class="row"><label>Contrast</label><input type="range" data-p="contrast" min="0.5" max="1.6" step="0.01"><span class="val"></span></div>
+    </details>
+
+    <details open>
+      <summary>Colour</summary>
+      <div class="row"><label>Saturation</label><input type="range" data-p="saturation" min="0" max="2.5" step="0.05"><span class="val"></span></div>
+      <div class="row"><label>Red boost</label><input type="range" data-p="hueRed" min="0" max="2.5" step="0.05"><span class="val"></span></div>
+      <div class="row"><label>Yellow boost</label><input type="range" data-p="hueYellow" min="0" max="2.5" step="0.05"><span class="val"></span></div>
+      <div class="row"><label>Green boost</label><input type="range" data-p="hueGreen" min="0" max="2.5" step="0.05"><span class="val"></span></div>
+      <div class="row"><label>Blue boost</label><input type="range" data-p="hueBlue" min="0" max="2.5" step="0.05"><span class="val"></span></div>
+      <div class="hint">Hue boosts scale chroma for that hue band only (skin sits in red/yellow, sky in blue, foliage in green).</div>
+      <div class="row"><label>Green lean</label><input type="range" data-p="greenLean" min="0" max="40" step="1"><span class="val"></span></div>
+      <div class="hint">Degrees to rotate yellow-green hues toward green before matching. Sunlit grass and leaves sit closer to the panel's yellow than its green and otherwise come out solid yellow.</div>
+      <div class="row"><label>Chroma weight</label><input type="range" data-p="chromaWeight" min="0.2" max="4" step="0.1"><span class="val"></span></div>
+      <div class="hint">How much the matcher cares about hue/saturation versus lightness. Above 1 it will pick a darker-but-blue mix over a grey one; that is what makes skies blue.</div>
+    </details>
+
+    <details open>
+      <summary>Dither</summary>
+      <div class="row"><label>Pattern</label><select data-p="dither">
+        <option value="bayer16">bayer 16x16</option><option value="bayer">bayer 8x8</option><option value="halftone">halftone 8x8</option>
+        <option value="floyd-steinberg">floyd-steinberg</option><option value="atkinson">atkinson</option><option value="jarvis">jarvis</option><option value="stucki">stucki</option><option value="none">none</option>
+      </select><span></span></div>
+      <div class="row"><label>Levels</label><input type="range" data-p="levels" min="2" max="64" step="1"><span class="val"></span></div>
+      <div class="row"><label>Mix</label><select data-p="mix"><option value="greedy">greedy (any inks)</option><option value="pair">pair (two inks)</option></select><span></span></div>
+      <div class="row"><label>Mix gamma</label><input type="range" data-p="mixGamma" min="0" max="2.4" step="0.1"><span class="val"></span></div>
+      <div class="hint">Mix gamma 0 = average inks in Lab. 2.2 = linear light (darker, richer). 1.5 = halfway, the "Qv" setting.</div>
+      <div class="row"><label>Pair spread</label><input type="range" data-p="spread" min="0" max="0.5" step="0.01"><span class="val"></span></div>
+      <div class="row"><label>ED chroma</label><input type="range" data-p="chromaStrength" min="0" max="1" step="0.05"><span class="val"></span></div>
+      <div class="hint">Pair spread and ED chroma only apply to pair mixing and to the error-diffusion patterns respectively.</div>
+      <div class="row"><label>Match inks</label><select data-p="matchInks"><option value="driver">driver table</option><option value="calibrated">calibrated (swatches below)</option></select><span></span></div>
+      <div class="hint">Which ink colours the matcher believes in. <i>driver table</i> is M5's palette (what the tested variants used). <i>calibrated</i> uses the simulated ink swatches, i.e. the panel's real light blue and leaf green, so pale skies can reach blue naturally.</div>
+    </details>
+
+    <details>
+      <summary>Label</summary>
+      <div class="row wide"><label>Text</label><input type="text" data-p="label" placeholder="burned into bottom-right; blank = none"></div>
+      <div class="row wide"><label>Filename suffix</label><input type="text" data-p="suffix" placeholder="e.g. _sky"></div>
+    </details>
+
+    <details open>
+      <summary>Panel simulation</summary>
+      <div class="row"><label>View</label><select id="viewMode"><option value="sim">simulated panel</option><option value="raw">raw palette pixels</option><option value="adj">adjusted, pre-dither</option></select><span></span></div>
+      <div class="row"><label>Zoom</label><select id="zoom"><option value="actual">actual size (~180 dpi)</option><option value="1">1 panel px = 1 screen px</option><option value="2">2x</option><option value="3">3x</option></select><span></span></div>
+      <div class="row"><label>Blur</label><input type="range" id="simBlur" min="0" max="2" step="0.1" value="0.7"><span class="val" id="simBlurVal">0.7</span></div>
+      <div class="hint">Blur in panel pixels approximates viewing distance: the eye blends neighbouring dots.</div>
+      <div class="hint">Simulated ink colours. Show <code>chart.bmp</code> on the device in daylight and adjust these until the swatches match.</div>
+      <div class="swatches" id="swatches"></div>
+      <div class="btns"><button id="simReset">Reset estimate</button><button id="simHybrid">Hybrid</button><button id="simDriver">Use driver palette</button></div>
+      <div class="hint">Hybrid = measured black/white/blue/green with the driver's red/yellow (cameras under-record saturated inks). With <i>Match inks: calibrated</i> these swatches are also what the dither matches against, so a brighter red swatch means bright reds get solid red ink.</div>
+    </details>
+  </aside>
+  <section id="stage">
+    <div class="pane"><div class="cap">Original (fitted)</div><canvas id="cOrig"></canvas></div>
+    <div class="pane"><div class="cap"><span id="rightCap">Simulated panel</span><span id="time"></span></div><canvas id="cRight"></canvas><div id="usage"></div></div>
+  </section>
+</main>
+<div id="drop">Drop photos to load</div>
+
+<script id="core">
+// ===================== Pure image core (no DOM) =====================
+// Kept DOM-free so it can be unit-tested under node and so the UI code
+// above it stays thin. Mirrors prepare_photo.py.
+'use strict';
+const PANEL_PALETTE = [[0,0,0],[255,255,255],[255,243,56],[191,0,0],[100,64,255],[67,138,28]];
+const INK_NAMES = ['black','white','yellow','red','blue','green'];
+// What the inks really look like: sampled from a daylight photo of chart.bmp
+// on the panel (2026-09-02), colour-cast corrected against the (neutral grey)
+// bezel and scaled so the panel's own white sits at 245. The camera flattened
+// the bright end, so relative colours are trustworthy, absolute levels less so;
+// black in particular is lighter than reality because of flare. Note the blue
+// is a light sky blue and the green a light leaf green, far from the driver's
+// table values above, which are only used to address the inks in the BMP.
+const SIM_ESTIMATE = [[81,62,60],[245,245,247],[253,244,63],[156,8,5],[91,149,218],[133,168,64]];
+
+const BAYER8 = [[0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],
+                [3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]];
+const HALFTONE8 = [[24,10,12,26,35,47,49,37],[8,0,2,14,45,59,61,51],[22,6,4,16,43,57,63,53],[30,20,18,28,33,41,55,39],
+                   [34,46,48,36,25,11,13,27],[44,58,60,50,9,1,3,15],[42,56,62,52,23,7,5,17],[32,40,54,38,31,21,19,29]];
+function bayerMatrix(size) {
+  let m = [[0]], n = 1;
+  while (n < size) {
+    m = m.map(r => r.map(v => 4*v).concat(r.map(v => 4*v+2))).concat(m.map(r => r.map(v => 4*v+3).concat(r.map(v => 4*v+1))));
+    n *= 2;
+  }
+  return m;
+}
+const KERNELS = {
+  'floyd-steinberg': [[1,0,7/16],[-1,1,3/16],[0,1,5/16],[1,1,1/16]],
+  'jarvis': [[1,0,7/48],[2,0,5/48],[-2,1,3/48],[-1,1,5/48],[0,1,7/48],[1,1,5/48],[2,1,3/48],[-2,2,1/48],[-1,2,3/48],[0,2,5/48],[1,2,3/48],[2,2,1/48]],
+  'stucki': [[1,0,8/42],[2,0,4/42],[-2,1,2/42],[-1,1,4/42],[0,1,8/42],[1,1,4/42],[2,1,2/42],[-2,2,1/42],[-1,2,2/42],[0,2,4/42],[1,2,2/42],[2,2,1/42]],
+  'atkinson': [[1,0,1/8],[2,0,1/8],[-1,1,1/8],[0,1,1/8],[1,1,1/8],[0,2,1/8]],
+  'none': [],
+};
+const ORDERED = new Set(['bayer','bayer16','halftone']);
+
+const DEFAULT_PARAMS = {
+  fit: 'cover', anchor: 0.3, orientation: 'auto',
+  smooth: 0.5, autoLevels: '1', gamma: 1.4, brightness: 1.0, contrast: 1.05,
+  saturation: 1.5, hueRed: 1.0, hueYellow: 1.0, hueGreen: 1.0, hueBlue: 1.0, greenLean: 0, chromaWeight: 1.0,
+  dither: 'bayer16', levels: 64, mix: 'greedy', mixGamma: 1.5, spread: 0.1, chromaStrength: 0.75,
+  matchInks: 'calibrated',
+  label: '', suffix: '',
+};
+
+// Starting points by subject, all panel-tested on 2026-09-02/03:
+// - "Default (S)": 16x16 Bayer, mix gamma 1.5, gamma 1.4, saturation 1.5,
+//   calibrated inks, no hue boosts. Won on two selfies (blue sky, skin) and a
+//   bird among leaves.
+// - "Foliage / landscape (T)": S with saturation 1.3. Beat S on a palm-tree
+//   and mountain scene that S rendered a little too green. (Lowering only the
+//   green gain made it *greener*; global saturation is the lever.)
+// - "Darker complexion (Z)": gamma 1.0, saturation 1.6, yellow 0.85. Closest
+//   on a portrait with a medium-brown complexion that S rendered too light;
+//   gamma 1.2 alone was a close second, gamma 1.2 with the other two changes
+//   was far off, so gamma is the lever. Red boosts of any size turned a pink
+//   top solid red and are not the answer for pinks.
+// Chroma weight and green lean are left at neutral: every variant using them
+// lost to the plain calibrated match.
+const BUILTIN_PRESETS = [
+  { name: 'Default (S)', params: { ...DEFAULT_PARAMS } },
+  { name: 'Foliage / landscape (T)', params: { ...DEFAULT_PARAMS, saturation: 1.3 } },
+  { name: 'Darker complexion (Z)', params: { ...DEFAULT_PARAMS, gamma: 1.0, saturation: 1.6, hueYellow: 0.85 } },
+];
+
+// ---- colour spaces ----
+const SRGB_TO_LIN = new Float64Array(256);
+for (let i = 0; i < 256; i++) { const c = i/255; SRGB_TO_LIN[i] = c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+function srgbToLinear(c) { c /= 255; return c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+function linearToSrgb(l) { l = l < 0 ? 0 : l > 1 ? 1 : l; return 255 * (l <= 0.0031308 ? l*12.92 : 1.055*Math.pow(l, 1/2.4) - 0.055); }
+function labF(t) { return t > 0.008856 ? Math.cbrt(t) : 7.787*t + 16/116; }
+function linearToLab(r, g, b, out, o) {
+  let x = (0.4124564*r + 0.3575761*g + 0.1804375*b) / 0.95047;
+  let y = (0.2126729*r + 0.7151522*g + 0.0721750*b);
+  let z = (0.0193339*r + 0.1191920*g + 0.9503041*b) / 1.08883;
+  const fx = labF(x), fy = labF(y), fz = labF(z);
+  out[o] = 116*fy - 16; out[o+1] = 500*(fx - fy); out[o+2] = 200*(fy - fz);
+}
+function labToRgb(L, a, b) {
+  const fy = (L + 16)/116, fx = fy + a/500, fz = fy - b/200;
+  const inv = f => { const t = f*f*f; return t > 0.008856 ? t : (f - 16/116)/7.787; };
+  const x = inv(fx)*0.95047, y = inv(fy), z = inv(fz)*1.08883;
+  const r =  3.2404542*x - 1.5371385*y - 0.4985314*z;
+  const g = -0.9692660*x + 1.8760108*y + 0.0415560*z;
+  const bb = 0.0556434*x - 0.2040259*y + 1.0572252*z;
+  return [linearToSrgb(r), linearToSrgb(g), linearToSrgb(bb)];
+}
+function rgb8ToLab(rgb, n) {   // Uint8 (n*3) -> Float64 lab (n*3). 64-bit keeps error diffusion bit-identical to the Python tool.
+  const out = new Float64Array(n*3);
+  for (let i = 0; i < n; i++) linearToLab(SRGB_TO_LIN[rgb[i*3]], SRGB_TO_LIN[rgb[i*3+1]], SRGB_TO_LIN[rgb[i*3+2]], out, i*3);
+  return out;
+}
+
+// ---- tone pipeline (PIL-equivalent operations on a packed RGB Uint8 buffer) ----
+function gaussianBlur(rgb, w, h, sigma) {
+  if (sigma <= 0) return rgb;
+  const r = Math.max(1, Math.ceil(sigma*3)), k = new Float64Array(2*r+1);
+  let s = 0; for (let i = -r; i <= r; i++) { k[i+r] = Math.exp(-(i*i)/(2*sigma*sigma)); s += k[i+r]; }
+  for (let i = 0; i < k.length; i++) k[i] /= s;
+  const tmp = new Float32Array(w*h*3), out = new Uint8ClampedArray(w*h*3);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let a0 = 0, a1 = 0, a2 = 0;
+    for (let i = -r; i <= r; i++) { const xx = Math.min(w-1, Math.max(0, x+i)), p = (y*w+xx)*3, kk = k[i+r]; a0 += rgb[p]*kk; a1 += rgb[p+1]*kk; a2 += rgb[p+2]*kk; }
+    const q = (y*w+x)*3; tmp[q] = a0; tmp[q+1] = a1; tmp[q+2] = a2;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let a0 = 0, a1 = 0, a2 = 0;
+    for (let i = -r; i <= r; i++) { const yy = Math.min(h-1, Math.max(0, y+i)), p = (yy*w+x)*3, kk = k[i+r]; a0 += tmp[p]*kk; a1 += tmp[p+1]*kk; a2 += tmp[p+2]*kk; }
+    const q = (y*w+x)*3; out[q] = a0; out[q+1] = a1; out[q+2] = a2;
+  }
+  return out;
+}
+function lumaOf(rgb, i) { return (rgb[i]*299 + rgb[i+1]*587 + rgb[i+2]*114) / 1000; }
+function applyLut(rgb, lut) { const n = rgb.length; for (let i = 0; i < n; i++) rgb[i] = lut[rgb[i]]; }
+function autoLevels(rgb, n, cutoff) {
+  // PIL ImageOps.autocontrast(cutoff, preserve_tone=True): histogram of L, same LUT on all bands.
+  const hist = new Int32Array(256);
+  for (let i = 0; i < n; i++) hist[Math.round(lumaOf(rgb, i*3))]++;
+  const cut = n*cutoff/100;
+  let lo = 0, acc = 0; while (lo < 255 && acc + hist[lo] <= cut) { acc += hist[lo]; lo++; }
+  let hi = 255; acc = 0; while (hi > 0 && acc + hist[hi] <= cut) { acc += hist[hi]; hi--; }
+  if (hi <= lo) return;
+  const scale = 255/(hi - lo), lut = new Uint8ClampedArray(256);
+  for (let i = 0; i < 256; i++) lut[i] = (i - lo)*scale;
+  applyLut(rgb, lut);
+}
+function adjustTone(rgb, w, h, p) {
+  const n = w*h;
+  if (p.smooth > 0) rgb = gaussianBlur(rgb, w, h, p.smooth);
+  if (p.autoLevels === '1' || p.autoLevels === 1 || p.autoLevels === true) autoLevels(rgb, n, 1);
+  if (p.gamma !== 1) { const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = Math.round(255*Math.pow(i/255, 1/p.gamma)); applyLut(rgb, lut); }
+  if (p.brightness !== 1) { const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = i*p.brightness; applyLut(rgb, lut); }
+  if (p.contrast !== 1) {
+    let mean = 0; for (let i = 0; i < n; i++) mean += lumaOf(rgb, i*3); mean = Math.round(mean/n);
+    const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = (i - mean)*p.contrast + mean; applyLut(rgb, lut);
+  }
+  if (p.saturation !== 1) {
+    for (let i = 0; i < n; i++) { const q = i*3, l = lumaOf(rgb, q); rgb[q] = l + (rgb[q]-l)*p.saturation; rgb[q+1] = l + (rgb[q+1]-l)*p.saturation; rgb[q+2] = l + (rgb[q+2]-l)*p.saturation; }
+  }
+  const gains = [+p.hueRed, +p.hueYellow, +p.hueGreen, +p.hueBlue], lean = +p.greenLean || 0;
+  if (gains.some(g => g !== 1) || lean !== 0) {
+    // Per-hue chroma scaling in LCh. Anchors are Lab hue angles: red ~40, yellow ~100, green ~140, blue ~270
+    // (sky sits near 240, the panel's ink near 306, both inside the blue band). Linear between anchors.
+    const anchors = [40, 100, 140, 270];
+    const gainAt = hDeg => {
+      let h = ((hDeg % 360) + 360) % 360;
+      for (let i = 0; i < 4; i++) {
+        const a0 = anchors[i], a1 = anchors[(i+1)%4] + (i === 3 ? 360 : 0);
+        let hh = h; if (i === 3 && hh < a0) hh += 360;
+        if (hh >= a0 && hh <= a1) { const t = (hh - a0)/(a1 - a0); return gains[i]*(1-t) + gains[(i+1)%4]*t; }
+      }
+      return 1;
+    };
+    const lab = new Float32Array(3);
+    for (let i = 0; i < n; i++) {
+      const q = i*3;
+      linearToLab(SRGB_TO_LIN[rgb[q]], SRGB_TO_LIN[rgb[q+1]], SRGB_TO_LIN[rgb[q+2]], lab, 0);
+      const C = Math.hypot(lab[1], lab[2]);
+      let h = Math.atan2(lab[2], lab[1])*180/Math.PI; h = ((h % 360) + 360) % 360;
+      if (lean !== 0) {
+        // Yellow-green window: full between 105 and 135, tapering to 0 at 80 and 160.
+        const wnd = Math.min(1, Math.max(0, Math.min((h - 80)/25, (160 - h)/25)));
+        if (wnd > 0) { h = (h + lean*wnd) % 360; const r = h*Math.PI/180; lab[1] = C*Math.cos(r); lab[2] = C*Math.sin(r); }
+      }
+      if (C < 2) continue;
+      const g = gainAt(h); if (g === 1 && lean === 0) continue;
+      const c = labToRgb(lab[0], lab[1]*g, lab[2]*g);
+      rgb[q] = c[0]; rgb[q+1] = c[1]; rgb[q+2] = c[2];
+    }
+  }
+  return rgb;
+}
+
+// ---- dithering ----
+function makeMatcher(palette, p) {
+  // Returns {palLab, dist(labArr, off, cand)}, distance weighted by chromaWeight.
+  const cw = +p.chromaWeight || 1;
+  const palLab = rgb8ToLab(new Uint8ClampedArray(palette.flat()), palette.length);
+  return { palLab, cw };
+}
+function orderedDither(rgb, w, h, palette, p) {
+  const n = w*h, np = palette.length;
+  const mode = p.dither, levels = Math.max(2, p.levels|0), mix = p.mix, mg = +p.mixGamma, spread = +p.spread;
+  const m = mode === 'bayer' ? BAYER8 : mode === 'halftone' ? HALFTONE8 : bayerMatrix(16);
+  const ms = m.length, mmax = ms*ms;
+  const mask = new Float32Array(mmax); for (let y = 0; y < ms; y++) for (let x = 0; x < ms; x++) mask[y*ms+x] = (m[y][x] + 0.5)/mmax;
+  const px = rgb8ToLab(rgb, n);
+  const { palLab, cw } = makeMatcher(palette, p);
+  // Mixing space: Lab (mg == 0) or (sRGB/255)^mg. Averages formed there are
+  // converted back to Lab for comparison. The conversion is the hot path of
+  // greedy mixing (levels x inks per unique colour), so it goes through an
+  // interpolated lookup table instead of two pow() calls per channel.
+  const useG = mg > 0;
+  const palMix = new Float64Array(np*3);
+  for (let j = 0; j < np; j++) for (let k = 0; k < 3; k++) palMix[j*3+k] = useG ? Math.pow(palette[j][k]/255, mg) : palLab[j*3+k];
+  const LN = 4096, LUT = new Float64Array(LN+2);
+  if (useG) for (let i = 0; i <= LN+1; i++) LUT[i] = srgbToLinear(Math.pow(Math.min(1, i/LN), 1/mg)*255);
+  const tmp = new Float64Array(3);
+  const lutLin = v => { if (v <= 0) return 0; if (v >= 1) return LUT[LN]; const f = v*LN, i = f|0, t = f-i; return LUT[i] + (LUT[i+1]-LUT[i])*t; };
+  const toMatch = useG
+    ? (a0, a1, a2) => linearToLab(lutLin(a0), lutLin(a1), lutLin(a2), tmp, 0)
+    : (a0, a1, a2) => { tmp[0] = a0; tmp[1] = a1; tmp[2] = a2; };
+  const cache = new Map();
+  let candidates, pick;
+  if (mix === 'greedy') {
+    const light = new Float64Array(np); for (let j = 0; j < np; j++) light[j] = palLab[j*3];
+    candidates = (L, A, B) => {
+      let acc0 = 0, acc1 = 0, acc2 = 0; const chosen = new Uint8Array(levels);
+      for (let i = 1; i <= levels; i++) {
+        let best = 0, bd = Infinity;
+        for (let j = 0; j < np; j++) {
+          toMatch((acc0+palMix[j*3])/i, (acc1+palMix[j*3+1])/i, (acc2+palMix[j*3+2])/i);
+          const dl = tmp[0]-L, da = tmp[1]-A, db = tmp[2]-B, d = dl*dl + cw*(da*da + db*db);
+          if (d < bd) { bd = d; best = j; }
+        }
+        chosen[i-1] = best; acc0 += palMix[best*3]; acc1 += palMix[best*3+1]; acc2 += palMix[best*3+2];
+      }
+      return chosen.sort((x, y) => light[x] - light[y]);
+    };
+    pick = (c, thr) => c[(thr*levels)|0];
+  } else {
+    const pa = [], pb = [], ratio = [];
+    for (let a = 0; a < np; a++) {
+      pa.push(a); pb.push(a); ratio.push(0);
+      for (let b = a+1; b < np; b++) for (let k = 1; k < levels; k++) { pa.push(a); pb.push(b); ratio.push(k/levels); }
+    }
+    const T = pa.length, mixedM = new Float64Array(T*3), pen = new Float64Array(T);
+    for (let i = 0; i < T; i++) {
+      const r = ratio[i], a = pa[i]*3, b = pb[i]*3;
+      toMatch(palMix[a]*(1-r)+palMix[b]*r, palMix[a+1]*(1-r)+palMix[b+1]*r, palMix[a+2]*(1-r)+palMix[b+2]*r);
+      mixedM[i*3] = tmp[0]; mixedM[i*3+1] = tmp[1]; mixedM[i*3+2] = tmp[2];
+      const dd = Math.hypot(palLab[a]-palLab[b], palLab[a+1]-palLab[b+1], palLab[a+2]-palLab[b+2]);
+      pen[i] = dd*spread*(Math.abs(r-0.5)+0.5);
+    }
+    candidates = (L, A, B) => {
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < T; i++) {
+        const dl = mixedM[i*3]-L, da = mixedM[i*3+1]-A, db = mixedM[i*3+2]-B;
+        const d = Math.sqrt(dl*dl + cw*(da*da + db*db)) + pen[i]; if (d < bd) { bd = d; best = i; }
+      }
+      return [pa[best], pb[best], ratio[best]];
+    };
+    pick = (c, thr) => thr < c[2] ? c[1] : c[0];
+  }
+  const out = new Uint8Array(n);
+  for (let y = 0; y < h; y++) {
+    const row = y*w, mrow = (y % ms)*ms;
+    for (let x = 0; x < w; x++) {
+      const i = row + x, L = px[i*3], A = px[i*3+1], B = px[i*3+2];
+      const key = ((Math.round(L)+1)*300 + (Math.round(A/2)+130))*300 + (Math.round(B/2)+130);
+      let c = cache.get(key);
+      if (c === undefined) { c = candidates(L, A, B); cache.set(key, c); }
+      out[i] = pick(c, mask[mrow + (x % ms)]);
+    }
+  }
+  return out;
+}
+function errorDiffusion(rgb, w, h, palette, p) {
+  const n = w*h, np = palette.length, kernel = KERNELS[p.dither] || [];
+  const cs = +p.chromaStrength;
+  const px = rgb8ToLab(rgb, n);
+  const { palLab, cw } = makeMatcher(palette, p);
+  const buf = Float64Array.from(px), out = new Uint8Array(n);
+  for (let y = 0; y < h; y++) {
+    const rev = (y & 1) === 1;
+    for (let xi = 0; xi < w; xi++) {
+      const x = rev ? w-1-xi : xi, i = (y*w + x)*3;
+      const L = buf[i], A = buf[i+1], B = buf[i+2];
+      let best = 0, bd = Infinity;
+      for (let j = 0; j < np; j++) { const dl = L-palLab[j*3], da = A-palLab[j*3+1], db = B-palLab[j*3+2]; const d = dl*dl + cw*(da*da+db*db); if (d < bd) { bd = d; best = j; } }
+      out[y*w+x] = best;
+      if (!kernel.length) continue;
+      const eL = L-palLab[best*3], eA = (A-palLab[best*3+1])*cs, eB = (B-palLab[best*3+2])*cs;
+      for (const [dx0, dy, wt] of kernel) {
+        const dx = rev ? -dx0 : dx0, nx = x+dx, ny = y+dy;
+        if (nx < 0 || nx >= w || ny >= h) continue;
+        const t = (ny*w+nx)*3; buf[t] += eL*wt; buf[t+1] += eA*wt; buf[t+2] += eB*wt;
+      }
+    }
+  }
+  return out;
+}
+function ditherToIndices(rgb, w, h, palette, p) {
+  return ORDERED.has(p.dither) ? orderedDither(rgb, w, h, palette, p) : errorDiffusion(rgb, w, h, palette, p);
+}
+
+// ---- BMP writer: 4 bpp indexed, bottom-up, palette = driver colours ----
+function writeBmp4(w, h, idx, palette) {
+  const rowBytes = ((w*4 + 31) >> 5) * 4, pixelBytes = rowBytes*h, off = 14 + 40 + 16*4, size = off + pixelBytes;
+  const buf = new ArrayBuffer(size), dv = new DataView(buf), u8 = new Uint8Array(buf);
+  u8[0] = 0x42; u8[1] = 0x4D; dv.setUint32(2, size, true); dv.setUint32(10, off, true);
+  dv.setUint32(14, 40, true); dv.setInt32(18, w, true); dv.setInt32(22, h, true); dv.setUint16(26, 1, true); dv.setUint16(28, 4, true);
+  dv.setUint32(30, 0, true); dv.setUint32(34, pixelBytes, true); dv.setInt32(38, 2835, true); dv.setInt32(42, 2835, true);
+  dv.setUint32(46, 16, true); dv.setUint32(50, 16, true);
+  for (let i = 0; i < 16; i++) { const c = palette[Math.min(i, palette.length-1)]; const o = 54 + i*4; u8[o] = c[2]; u8[o+1] = c[1]; u8[o+2] = c[0]; u8[o+3] = 0; }
+  let o = off;
+  for (let y = h-1; y >= 0; y--) {
+    const base = y*w;
+    for (let x = 0; x < w-1; x += 2) u8[o + (x>>1)] = (idx[base+x] << 4) | idx[base+x+1];
+    if (w & 1) u8[o + (w>>1)] = idx[base+w-1] << 4;
+    o += rowBytes;
+  }
+  return buf;
+}
+if (typeof module !== 'undefined') module.exports = { PANEL_PALETTE, DEFAULT_PARAMS, adjustTone, ditherToIndices, writeBmp4, gaussianBlur, rgb8ToLab };
+</script>
+
+<script id="ui">
+// ===================== UI =====================
+(() => {
+'use strict';
+const $ = s => document.querySelector(s), $$ = s => Array.from(document.querySelectorAll(s));
+const LS_PRESETS = 'papercolor-lab-presets', LS_SIM = 'papercolor-lab-sim', LS_LAST = 'papercolor-lab-last';
+const PANEL_DPI = 180;
+
+const photos = [];          // {name, stem, bitmap, params}
+let cur = -1;
+let simPalette = loadJson(LS_SIM) || SIM_ESTIMATE.map(c => c.slice());
+let userPresets = loadJson(LS_PRESETS) || [];
+let lastResult = null;      // {w,h,idx,adjusted}
+let renderTimer = null;
+
+function loadJson(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+function saveJson(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function status(msg, err) { const s = $('#status'); s.textContent = msg; s.classList.toggle('err', !!err); }
+
+// ---- params <-> controls ----
+const controls = $$('[data-p]');
+function readParams() {
+  const p = {};
+  for (const el of controls) { const k = el.dataset.p; p[k] = el.type === 'range' ? +el.value : el.value; }
+  return p;
+}
+function setParams(p) {
+  for (const el of controls) { const k = el.dataset.p; if (!(k in p)) continue; el.value = p[k]; const v = el.parentElement.querySelector('.val'); if (v) v.textContent = fmt(p[k]); }
+}
+function fmt(v) { return typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0$/, '')) : v; }
+for (const el of controls) {
+  el.addEventListener('input', () => {
+    const v = el.parentElement.querySelector('.val'); if (v) v.textContent = fmt(el.type === 'range' ? +el.value : el.value);
+    if (cur >= 0) photos[cur].params = readParams();
+    markModified(); scheduleRender();
+  });
+}
+
+// ---- presets ----
+function allPresets() { return BUILTIN_PRESETS.map(p => ({ ...p, builtin: true })).concat(userPresets); }
+function fillPresetSelect(selectName) {
+  const sel = $('#presetSel'); sel.innerHTML = '';
+  const g1 = document.createElement('optgroup'); g1.label = 'Built-in';
+  const g2 = document.createElement('optgroup'); g2.label = 'Mine';
+  for (const p of allPresets()) { const o = document.createElement('option'); o.value = p.name; o.textContent = p.name; (p.builtin ? g1 : g2).appendChild(o); }
+  sel.appendChild(g1); if (userPresets.length) sel.appendChild(g2);
+  if (selectName) sel.value = selectName;
+}
+function currentPreset() { return allPresets().find(p => p.name === $('#presetSel').value); }
+function markModified() {
+  const p = currentPreset(); if (!p) return;
+  const now = readParams();
+  const diff = Object.keys(p.params).some(k => String(p.params[k]) !== String(now[k]));
+  $('#presetMod').textContent = diff ? 'modified' : '';
+  $('#presetUpdate').disabled = p.builtin || !diff; $('#presetDelete').disabled = !!p.builtin;
+}
+$('#presetSel').addEventListener('change', () => { const p = currentPreset(); if (!p) return; setParams({ ...DEFAULT_PARAMS, ...p.params }); if (cur >= 0) photos[cur].params = readParams(); markModified(); scheduleRender(); });
+$('#presetSaveAs').addEventListener('click', () => {
+  const name = prompt('Preset name:', ''); if (!name) return;
+  if (BUILTIN_PRESETS.some(p => p.name === name)) { alert('That name is a built-in preset; pick another.'); return; }
+  const params = readParams(); delete params.label; delete params.suffix;
+  const i = userPresets.findIndex(p => p.name === name);
+  if (i >= 0) userPresets[i].params = params; else userPresets.push({ name, params });
+  saveJson(LS_PRESETS, userPresets); fillPresetSelect(name); markModified();
+});
+$('#presetUpdate').addEventListener('click', () => {
+  const p = currentPreset(); if (!p || p.builtin) return;
+  const params = readParams(); delete params.label; delete params.suffix;
+  p.params = params; saveJson(LS_PRESETS, userPresets); markModified();
+});
+$('#presetDelete').addEventListener('click', () => {
+  const p = currentPreset(); if (!p || p.builtin) return;
+  if (!confirm(`Delete preset "${p.name}"?`)) return;
+  userPresets = userPresets.filter(x => x.name !== p.name); saveJson(LS_PRESETS, userPresets); fillPresetSelect(BUILTIN_PRESETS[0].name); $('#presetSel').dispatchEvent(new Event('change'));
+});
+$('#presetExport').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ presets: userPresets, simPalette }, null, 2)], { type: 'application/json' });
+  download(blob, 'papercolor_presets.json');
+});
+$('#presetImport').addEventListener('click', () => $('#presetFile').click());
+$('#presetFile').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    for (const p of (j.presets || [])) { const i = userPresets.findIndex(x => x.name === p.name); if (i >= 0) userPresets[i] = p; else userPresets.push(p); }
+    if (j.simPalette) { simPalette = j.simPalette; saveJson(LS_SIM, simPalette); fillSwatches(); }
+    saveJson(LS_PRESETS, userPresets); fillPresetSelect($('#presetSel').value); status(`Imported ${(j.presets||[]).length} preset(s).`); scheduleRender();
+  } catch (err) { status('Could not read that JSON: ' + err.message, true); }
+  e.target.value = '';
+});
+
+// ---- simulated palette ----
+function hex(c) { return '#' + c.map(v => v.toString(16).padStart(2, '0')).join(''); }
+function unhex(s) { return [1,3,5].map(i => parseInt(s.substr(i, 2), 16)); }
+function fillSwatches() {
+  const box = $('#swatches'); box.innerHTML = '';
+  INK_NAMES.forEach((name, i) => {
+    const l = document.createElement('label'); const inp = document.createElement('input'); inp.type = 'color'; inp.value = hex(simPalette[i]);
+    inp.addEventListener('input', () => { simPalette[i] = unhex(inp.value); saveJson(LS_SIM, simPalette); if (readParams().matchInks === 'calibrated') scheduleRender(); else drawRight(); });
+    l.appendChild(inp); l.appendChild(document.createTextNode(name)); box.appendChild(l);
+  });
+}
+function setSimPalette(pal) { simPalette = pal.map(c => c.slice()); saveJson(LS_SIM, simPalette); fillSwatches(); if (readParams().matchInks === 'calibrated') scheduleRender(); else drawRight(); }
+$('#simReset').addEventListener('click', () => setSimPalette(SIM_ESTIMATE));
+$('#simDriver').addEventListener('click', () => setSimPalette(PANEL_PALETTE));
+$('#simHybrid').addEventListener('click', () => setSimPalette(SIM_ESTIMATE.map((c, i) => (i === 2 || i === 3) ? PANEL_PALETTE[i] : c)));
+$('#simBlur').addEventListener('input', e => { $('#simBlurVal').textContent = e.target.value; drawRight(); });
+$('#viewMode').addEventListener('change', drawRight);
+$('#zoom').addEventListener('change', () => { drawRight(); layoutZoom(); });
+
+// ---- loading photos ----
+async function addFiles(files) {
+  for (const f of files) {
+    if (!f.type.startsWith('image/') && !/\.(heic|heif)$/i.test(f.name)) continue;
+    status(`Decoding ${f.name}…`);
+    let bitmap;
+    try { bitmap = await createImageBitmap(f, { imageOrientation: 'from-image' }); }
+    catch (e) {
+      status(`${f.name}: this browser cannot decode it. For HEIC, convert first: sips -s format jpeg "${f.name}" --out photo.jpg`, true);
+      continue;
+    }
+    const stem = f.name.replace(/\.[^.]+$/, '');
+    photos.push({ name: f.name, stem, bitmap, params: readParams() });
+    const o = document.createElement('option'); o.value = photos.length-1; o.textContent = f.name; $('#photoList').appendChild(o);
+  }
+  if (cur < 0 && photos.length) selectPhoto(0); else if (photos.length) { $('#photoList').value = photos.length-1; selectPhoto(photos.length-1); }
+}
+function selectPhoto(i) {
+  cur = i; $('#photoList').value = i; setParams(photos[i].params); markModified(); $('#saveBtn').disabled = false; scheduleRender();
+}
+$('#fileIn').addEventListener('change', e => addFiles(Array.from(e.target.files)));
+$('#photoList').addEventListener('change', e => selectPhoto(+e.target.value));
+let dragDepth = 0;
+document.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; $('#drop').classList.add('on'); });
+document.addEventListener('dragleave', e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop').classList.remove('on'); } });
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('on'); addFiles(Array.from(e.dataTransfer.files)); });
+
+// ---- fit / resample ----
+function fitBitmap(bitmap, p) {
+  let W, H;
+  const portrait = p.orientation === 'portrait' || (p.orientation === 'auto' && bitmap.height > bitmap.width);
+  if (portrait) { W = 400; H = 600; } else { W = 600; H = 400; }
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  let sx = 0, sy = 0, sw = bitmap.width, sh = bitmap.height, dx = 0, dy = 0, dw = W, dh = H;
+  if (p.fit === 'cover') {
+    const sr = sw/sh, dr = W/H;
+    if (sr > dr) { const nw = Math.round(sh*dr); sx = Math.round((sw - nw)*p.anchor); sw = nw; }
+    else { const nh = Math.round(sw/dr); sy = Math.round((sh - nh)*p.anchor); sh = nh; }
+  } else {
+    const s = Math.min(W/sw, H/sh); dw = Math.max(1, Math.round(sw*s)); dh = Math.max(1, Math.round(sh*s)); dx = (W - dw) >> 1; dy = (H - dh) >> 1;
+  }
+  // Two-stage downscale for quality on big phone photos.
+  let src = bitmap, ssx = sx, ssy = sy, ssw = sw, ssh = sh;
+  if (sw > dw*2.5) {
+    const mid = document.createElement('canvas'); mid.width = dw*2; mid.height = dh*2;
+    const mctx = mid.getContext('2d'); mctx.imageSmoothingEnabled = true; mctx.imageSmoothingQuality = 'high';
+    mctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, mid.width, mid.height);
+    src = mid; ssx = 0; ssy = 0; ssw = mid.width; ssh = mid.height;
+  }
+  ctx.drawImage(src, ssx, ssy, ssw, ssh, dx, dy, dw, dh);
+  const id = ctx.getImageData(0, 0, W, H), rgb = new Uint8ClampedArray(W*H*3);
+  for (let i = 0, j = 0; i < id.data.length; i += 4, j += 3) { rgb[j] = id.data[i]; rgb[j+1] = id.data[i+1]; rgb[j+2] = id.data[i+2]; }
+  return { W, H, rgb, canvas: c };
+}
+function burnLabel(rgb, W, H, text) {
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const ctx = c.getContext('2d');
+  const id = ctx.createImageData(W, H); for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) { id.data[i] = rgb[j]; id.data[i+1] = rgb[j+1]; id.data[i+2] = rgb[j+2]; id.data[i+3] = 255; }
+  ctx.putImageData(id, 0, 0);
+  ctx.font = '600 16px -apple-system, Helvetica, Arial, sans-serif'; ctx.textBaseline = 'alphabetic';
+  const tw = ctx.measureText(text).width, th = 16, x = W - tw - 12, y = H - 12;
+  ctx.fillStyle = '#fff'; ctx.fillRect(x - 6, y - th - 4, tw + 12, th + 10); ctx.fillStyle = '#000'; ctx.fillText(text, x, y);
+  const out = ctx.getImageData(0, 0, W, H); for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) { rgb[j] = out.data[i]; rgb[j+1] = out.data[i+1]; rgb[j+2] = out.data[i+2]; }
+}
+
+// ---- render ----
+// Tone + dither run in a Web Worker built from the #core script, so slider
+// drags stay responsive while a 0.2-1 s render is in flight. Only one render
+// is in flight at a time; the newest request replaces any queued one.
+let worker = null, inflight = null, queued = null, seq = 0;
+function makeWorker() {
+  const src = $('#core').textContent + `
+    self.onmessage = e => { const { rgb, W, H, p, pal, seq, t0 } = e.data;
+      try { const adj = adjustTone(rgb, W, H, p); const idx = ditherToIndices(adj, W, H, pal, p);
+        self.postMessage({ seq, idx, adj, W, H, t0 }, [idx.buffer, adj.buffer]); }
+      catch (err) { self.postMessage({ seq, error: err.message }); } };`;
+  const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  w.onmessage = e => {
+    const m = e.data; inflight = null;
+    if (m.error) status('Render failed: ' + m.error, true);
+    else if (m.seq === seq) {
+      lastResult = { W: m.W, H: m.H, idx: m.idx, adjusted: m.adj };
+      $('#time').textContent = `${(performance.now() - m.t0).toFixed(0)} ms`;
+      drawRight(); drawUsage(); layoutZoom();
+    }
+    if (queued) { const q = queued; queued = null; submit(q); }
+  };
+  w.onerror = e => { status('Worker error: ' + e.message, true); inflight = null; };
+  return w;
+}
+function submit(job) {
+  if (inflight) { queued = job; return; }
+  inflight = job; worker.postMessage(job, [job.rgb.buffer]);
+}
+function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(render, 80); }
+function render() {
+  if (cur < 0) return;
+  const p = readParams(), ph = photos[cur], t0 = performance.now();
+  try {
+    if (!worker) worker = makeWorker();
+    const fit = fitBitmap(ph.bitmap, p);
+    drawCanvas($('#cOrig'), fit.W, fit.H, fit.rgb);
+    const rgb = new Uint8ClampedArray(fit.rgb);
+    // The label is pure black on white, which every tone step maps to itself,
+    // so it can go in before adjustment and still come out crisp.
+    if (p.label) burnLabel(rgb, fit.W, fit.H, p.label);
+    $('#time').textContent = 'rendering…';
+    status(`${ph.name}: ${ph.bitmap.width}x${ph.bitmap.height} → ${fit.W}x${fit.H}`);
+    // The BMP always addresses inks by the driver's table; only the *matching*
+    // palette changes. Index order is identical, so no remap is needed.
+    const pal = p.matchInks === 'calibrated' ? simPalette.map(c => c.slice()) : PANEL_PALETTE;
+    submit({ rgb, W: fit.W, H: fit.H, p, pal, seq: ++seq, t0 });
+  } catch (e) { status('Render failed: ' + e.message, true); console.error(e); }
+}
+function drawCanvas(c, W, H, rgb) {
+  c.width = W; c.height = H; const ctx = c.getContext('2d'); const id = ctx.createImageData(W, H);
+  for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) { id.data[i] = rgb[j]; id.data[i+1] = rgb[j+1]; id.data[i+2] = rgb[j+2]; id.data[i+3] = 255; }
+  ctx.putImageData(id, 0, 0);
+}
+function drawRight() {
+  if (!lastResult) return;
+  const { W, H, idx, adjusted } = lastResult, mode = $('#viewMode').value, c = $('#cRight');
+  $('#rightCap').textContent = mode === 'sim' ? 'Simulated panel' : mode === 'raw' ? 'Raw palette pixels (what the file holds)' : 'Adjusted, before dithering';
+  if (mode === 'adj') { drawCanvas(c, W, H, adjusted); c.classList.remove('pixelated'); return; }
+  const pal = mode === 'raw' ? PANEL_PALETTE : simPalette;
+  let rgb = new Uint8ClampedArray(W*H*3);
+  for (let i = 0; i < idx.length; i++) { const k = pal[idx[i]]; rgb[i*3] = k[0]; rgb[i*3+1] = k[1]; rgb[i*3+2] = k[2]; }
+  if (mode === 'sim') { const b = +$('#simBlur').value; if (b > 0) rgb = gaussianBlur(rgb, W, H, b); }
+  drawCanvas(c, W, H, rgb);
+  c.classList.toggle('pixelated', mode === 'raw');
+}
+function layoutZoom() {
+  if (!lastResult) return;
+  const z = $('#zoom').value, { W, H } = lastResult;
+  const scale = z === 'actual' ? 96/PANEL_DPI : +z;
+  for (const c of [$('#cOrig'), $('#cRight')]) { c.style.width = (W*scale) + 'px'; c.style.height = (H*scale) + 'px'; }
+}
+function drawUsage() {
+  const counts = new Array(6).fill(0); for (const i of lastResult.idx) counts[i]++;
+  const n = lastResult.idx.length;
+  $('#usage').innerHTML = INK_NAMES.map((nm, i) => `<span><i style="background:${hex(PANEL_PALETTE[i])}"></i>${nm} ${(100*counts[i]/n).toFixed(0)}%</span>`).join('');
+}
+
+// ---- save ----
+function download(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+$('#saveBtn').addEventListener('click', () => {
+  if (!lastResult || cur < 0) return;
+  const p = readParams(), { W, H, idx } = lastResult;
+  const buf = writeBmp4(W, H, idx, PANEL_PALETTE);
+  download(new Blob([buf], { type: 'image/bmp' }), photos[cur].stem + (p.suffix || '') + '.bmp');
+  status(`Saved ${photos[cur].stem}${p.suffix || ''}.bmp (${(buf.byteLength/1024).toFixed(0)} KB). Copy it to the Espressif drive.`);
+});
+document.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); $('#saveBtn').click(); } });
+
+// ---- init ----
+fillPresetSelect(BUILTIN_PRESETS[0].name);
+setParams({ ...DEFAULT_PARAMS, ...(loadJson(LS_LAST) || {}) });
+fillSwatches(); markModified();
+window.addEventListener('beforeunload', () => saveJson(LS_LAST, readParams()));
+})();
+</script>
+</body>
+</html>

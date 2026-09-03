@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "hal/hal.cpp"
+        "hal/storage/hal_storage.cpp"
+        "hal/utils/image/image_utils.cpp"
+        "hal/utils/audio/audio.cpp"
+        "apps/local_photo_slideshow/local_photo_slideshow.cpp"
+        "apps/app_manager/app_manager.cpp"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        nvs_flash
+        fatfs
+        wear_levelling
+        esp_event
+        esp_netif
+        esp_wifi
+        M5Unified
+        M5GFX
+        tinyusb
+)
