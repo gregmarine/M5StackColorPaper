@@ -33,12 +33,35 @@ Wi-Fi AP "PaperColor-XXXX"  (WPA2)     <-- credentials drawn on the panel
 The credentials are generated once and kept in NVS, so they never change and
 your phone will rejoin on its own after the first time.
 
-### If the app does not appear on its own
+### The sign-in window is a signpost, not the app
 
-iOS opens captive portals in a cut-down browser that often cannot reach the
-photo picker. The app notices it is running there and says so; open
-`http://192.168.4.1` in Safari instead. Nothing is lost by doing that — it is
-the same page.
+Joining the network pops up the phone's Wi-Fi sign-in window. That window
+deliberately does **not** get the photo manager. It gets a small page with the
+address and an *Open the photo manager* button, and that is all.
+
+The reason is that the sign-in window is not a browser in any useful sense:
+
+- **Android's** is a stock WebView whose host app implements no file chooser,
+  so the photo picker is simply dead — tapping *Choose photo* does nothing at
+  all, with no error.
+- **iOS's** additionally suppresses `confirm()` and friends: the dialog never
+  appears and the call reports "cancelled", so anything gated behind one
+  silently does nothing.
+
+Rendering the real app there produces a manager where half the controls
+quietly fail, which is worse than not offering it. So the portal is kept for
+discovery — it is how you find the address without reading it off the panel —
+and the app itself runs in Chrome or Safari, where everything works.
+
+The frame recognises that window from the `User-Agent`
+(`CaptiveNetworkSupport` on iOS, the `; wv` WebView marker on Android) and
+serves the signpost to it, at `/` as well as at the probe URLs, since the
+window follows its own redirect. The web app carries the same check as a
+fallback for in-app browsers that are not captive portals.
+
+If the button does not launch anything, type `http://192.168.4.1` into your
+browser. Bookmarking it, or adding it to your home screen, skips all of this
+next time.
 
 ## What runs where
 
@@ -106,7 +129,7 @@ the WPA2 key.
 
 | Method | Path | Does |
 |--------|------|------|
-| GET | `/` | the web app (gzipped, from flash) |
+| GET | `/` | the web app (gzipped, from flash), or the signpost page for a captive-portal browser |
 | GET | `/api/photos` | `{"photos":[{"name","bytes"}]}`, in display order |
 | POST | `/api/photos?name=X.bmp` | upload; the **raw BMP is the body** |
 | DELETE | `/api/photos/X.bmp` | remove one |
@@ -145,7 +168,7 @@ error rather than filling the volume.
 
 ```
 main/net/wifi_ap.cpp     soft AP, credential generation and NVS persistence
-main/net/web_server.cpp  esp_http_server, captive-portal redirects
+main/net/web_server.cpp  esp_http_server, the signpost page, captive-portal probes
 main/net/photo_api.cpp   the /api endpoints, all FAT access under the lock
 main/net/ap_mode.cpp     the session: panel screen, idle timers, queued refreshes
 main/web/app.ui.html     the mobile UI (pipeline spliced in at build time)
