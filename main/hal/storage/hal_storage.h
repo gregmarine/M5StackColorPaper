@@ -72,6 +72,32 @@ void storage_mount_to_usb(void);
  */
 void hal_storage_prepare_photo_fs_access(void);
 
+/**
+ * @brief Detaches the device from USB, leaving the volume mounted by the app.
+ *
+ * Added for the photo-frame firmware. Hotspot mode needs the FAT volume for
+ * itself -- it has one owner at a time -- and dropping off the USB bus is
+ * cleaner than leaving the host holding a drive that has stopped answering.
+ * It also hands the port back to the USB-Serial-JTAG console, which is what
+ * makes hotspot mode debuggable over the cable.
+ *
+ * The host will report that the drive was removed improperly if it still had
+ * it mounted. That is unavoidable: the alternative is corrupting it.
+ *
+ * @return ESP_OK on success, otherwise an ESP error code.
+ */
+esp_err_t hal_storage_usb_detach(void);
+
+/**
+ * @brief Re-attaches the device to USB after hal_storage_usb_detach().
+ *
+ * @return ESP_OK on success, otherwise an ESP error code.
+ */
+esp_err_t hal_storage_usb_attach(void);
+
+/** @brief Returns whether the TinyUSB device driver is currently installed. */
+bool hal_storage_usb_attached(void);
+
 /** @brief Locks storage access. */
 void hal_storage_lock(void);
 /** @brief Unlocks storage access. */

@@ -17,6 +17,10 @@ or that were learned the hard way.
   slideshow's current photo index.
 - SHT40 temperature/humidity sensor at 0x44 (unused).
 - Speaker and microphone on I2S (unused apart from a button click tone).
+- 2.4 GHz Wi-Fi, used only as a soft AP for the on-device photo manager
+  ([webapp.md](webapp.md)). The frame never joins another network. The radio
+  is the heaviest current draw on the board, so the hotspot refuses to start
+  below 3.5 V and caps its own session at an hour.
 
 ## GPIO map (as used here)
 
@@ -24,7 +28,7 @@ or that were learned the hard way.
 |----------|------|
 | Key A, upper side key | 10 (active low) |
 | Key B, lower side key | 9 (active low) |
-| Key C, top edge | 1 (active low) |
+| Key C, top edge | 1 (active low) — opens the photo-manager hotspot |
 | Panel SPI MOSI / MISO / SCLK | 13 / 14 / 15 |
 | Panel DC / CS / RST / BUSY | 43 / 44 / 12 / 11 |
 | SD card CS | 47 |

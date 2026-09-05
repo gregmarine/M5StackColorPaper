@@ -98,7 +98,7 @@ real ink colours).
 | `--contrast` | 1.05 | |
 | `--brightness` | 1.0 | |
 | `--gamma` | 1.4 | >1 lifts shadows, which the panel tends to crush into black |
-| `--fit` | `contain` | Letterbox on white, keeps the whole photo. `cover` crops to fill and beheads portrait shots |
+| `--fit` | `cover` | Crop to fill the panel; `--anchor` picks which part survives. `contain` letterboxes on white and keeps the whole photo |
 
 `--chart` writes `chart.bmp`: six solid swatches on top, then dithered ramps
 (grey, white->red, white->blue, white->green, yellow->red, blue->green).

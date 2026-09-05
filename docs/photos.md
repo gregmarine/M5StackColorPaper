@@ -11,7 +11,14 @@ decided on the computer, not on the device. The workflow is:
 
 Both tools live in `tools/prepare_photo/` and produce identical files for the
 same settings; the browser tool's dither is a line-for-line port of the
-Python one and is regression-tested against it.
+Python one, and `tools/test/run.sh` holds them to byte-identical output.
+
+**Or skip the computer entirely.** Press the frame's top-edge key and it
+raises a Wi-Fi hotspot serving the same pipeline as a phone web app: pick a
+photo, choose a preset, send it. That is the shortest path and usually the
+right one — see [webapp.md](webapp.md). The rest of this page is the desktop
+route, which is still what you want for batches, for tuning, and for the
+A/B rounds in [dithering.md](dithering.md).
 
 ## Photo Lab (browser)
 
@@ -128,6 +135,8 @@ file the Photo Lab saves with that preset.
 
 ## Copying to the frame
 
+(Or use the hotspot instead: [webapp.md](webapp.md).)
+
 1. Plug the frame in. If the `Espressif` disk does not appear within a few
    seconds, press the side button once.
 2. Copy the `.bmp` files to the root of the disk. If you use Finder, run
@@ -136,6 +145,7 @@ file the Photo Lab saves with that preset.
 3. Eject, unplug. The frame powers itself off.
 4. Press the side button, then the lower side key to draw the first photo.
 
-The disk is 6 MB and each BMP is 120 KB, so about 48 photos fit. Files are
+The disk is 6 MB and each BMP is about 176 KB at 400x600, so roughly 30-48
+photos fit. Files are
 shown in name order. The volume label `Espressif` comes from the empty
 filesystem image; the USB device name is `PaperColor`.

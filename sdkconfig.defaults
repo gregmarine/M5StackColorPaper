@@ -68,3 +68,15 @@ CONFIG_I2C_MS_TO_WAIT=200
 
 # ===== Core Dump =====
 CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+
+# ===== Wi-Fi (the photo-manager hotspot) =====
+# The radio only ever runs as a soft AP for a phone a couple of feet away, and
+# it has to share internal DRAM with TinyUSB and a 720 KB PSRAM canvas. Pushing
+# the Wi-Fi and lwIP buffers into PSRAM is the setting that matters; the buffer
+# counts are trimmed from the defaults but left high enough to keep a ~120 KB
+# BMP upload moving.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=24
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=24
