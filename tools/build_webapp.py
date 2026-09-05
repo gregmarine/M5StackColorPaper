@@ -74,15 +74,22 @@ def extract_block_body(html: str, block_id: str, source: Path) -> str:
 
 
 def check_self_contained(html: str, out: Path) -> None:
-    """The device serves this page with no internet, so nothing may be remote.
+    """The device serves this page with no internet, so nothing may be loaded
+    remotely.
 
-    A stray CDN link would leave the phone staring at an unstyled page with no
-    obvious cause, so fail the build instead.
+    Only things the browser actually *fetches* count: any `src`, and `href` on
+    `<link>`. A plain `<a href="http://192.168.4.1/">` is not a remote
+    resource -- it is the escape hatch out of the captive-portal browser, and
+    points at the frame itself.
     """
-    remote = re.findall(r'(?:src|href)\s*=\s*["\'](https?:|//)', html)
-    if remote:
+    offenders = []
+    offenders += re.findall(r"""\bsrc\s*=\s*["'](https?:|//)""", html)
+    offenders += re.findall(
+        r"""<link\b[^>]*?\bhref\s*=\s*["'](https?:|//)""", html, re.IGNORECASE
+    )
+    if offenders:
         raise BuildError(
-            f"{out}: page references {len(remote)} remote resource(s). "
+            f"{out}: page loads {len(offenders)} remote resource(s). "
             f"The device has no internet connection; inline everything."
         )
 

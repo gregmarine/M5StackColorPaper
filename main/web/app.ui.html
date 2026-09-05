@@ -74,6 +74,9 @@
 
   #preview { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); background: #fff; margin: 10px auto; image-rendering: auto; }
   #banner { background: #fff5d6; border: 1px solid #e4d08a; border-radius: 8px; padding: 10px 12px; font-size: 14px; margin-bottom: 12px; }
+  #banner a, .escape a { color: var(--accent); font-weight: 600; }
+  .escape { background: #fff5d6; border: 1px solid #e4d08a; border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 12px 0; }
+  .card .acts button.armed { background: var(--warn); color: #fff; border-color: var(--warn); }
   .hidden { display: none !important; }
   #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom)); background: #222; color: #fff; padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 20; max-width: 90%; }
 </style>
@@ -149,6 +152,22 @@
 (() => {
 'use strict';
 const $ = s => document.querySelector(s);
+
+// Both platforms open a captive portal in a stripped-down browser, and neither
+// can do what this app needs. Android's is a plain WebView whose host app does
+// not implement a file chooser, so tapping "Choose photo" does nothing at all;
+// iOS's additionally suppresses dialogs. Detect it and say so up front rather
+// than letting a dead button be the first sign.
+//
+//   CaptiveNetworkSupport  iOS's captive-portal browser identifies itself
+//   "; wv"                 the standard Android WebView marker
+const RESTRICTED_BROWSER =
+  /CaptiveNetworkSupport/i.test(navigator.userAgent) || /;\s*wv[;)]/i.test(navigator.userAgent);
+
+const ESCAPE_HTML =
+  'You are in the Wi-Fi sign-in window, which cannot open your photo library. ' +
+  '<a href="http://192.168.4.1/" target="_blank" rel="noopener">Open http://192.168.4.1</a> ' +
+  'in Chrome or Safari to add photos. Everything else here works either way.';
 
 let photos = [];          // [{name, bytes}] in the frame's display order
 let orderDirty = false;
@@ -252,6 +271,7 @@ const lazy = new IntersectionObserver(entries => {
 
 function renderList() {
   const list = $('#list');
+  armed = null;   // the buttons holding that state are about to be replaced
   list.innerHTML = '';
   if (!photos.length) {
     list.innerHTML = '<p class="muted">No photos on the frame yet. Use <b>Add photo</b>.</p>';
@@ -282,7 +302,7 @@ function renderList() {
     move.appendChild(makeButton('↑', () => movePhoto(i, -1), i === 0));
     move.appendChild(makeButton('↓', () => movePhoto(i, 1), i === photos.length - 1));
     acts.appendChild(move);
-    acts.appendChild(makeButton('Delete', () => deletePhoto(photo.name)));
+    acts.appendChild(makeDeleteButton(photo.name));
     card.appendChild(acts);
 
     list.appendChild(card);
@@ -337,8 +357,40 @@ $('#cancelOrder').addEventListener('click', () => {
   renderList();
 });
 
+// Deleting takes two taps rather than a confirm() dialog. iOS opens captive
+// portals in a browser that silently suppresses confirm() -- it never shows
+// the dialog and reports "cancelled" -- so Delete did nothing at all there,
+// with no error to explain why. An in-page confirmation cannot be suppressed,
+// and is a better target on a phone anyway.
+let armed = null;   // {name, disarm}
+
+function makeDeleteButton(name) {
+  const button = document.createElement('button');
+  button.textContent = 'Delete';
+  const disarm = () => {
+    clearTimeout(button._timer);
+    button.textContent = 'Delete';
+    button.classList.remove('armed');
+    if (armed && armed.name === name) armed = null;
+  };
+  button.addEventListener('click', () => {
+    if (armed && armed.name === name) {
+      disarm();
+      deletePhoto(name);
+      return;
+    }
+    if (armed) armed.disarm();
+    armed = { name, disarm };
+    button.textContent = 'Sure?';
+    button.classList.add('armed');
+    // Disarm on its own, so a stray tap does not leave a live delete button
+    // waiting for the next one.
+    button._timer = setTimeout(disarm, 5000);
+  });
+  return button;
+}
+
 async function deletePhoto(name) {
-  if (!confirm(`Delete ${name} from the frame?`)) return;
   try {
     await api('/api/photos/' + encodeURIComponent(name), { method: 'DELETE' });
     toast('Deleted');
@@ -358,10 +410,10 @@ async function pollRefresh() {
     await new Promise(r => setTimeout(r, 1500));
     try {
       const s = await (await api('/api/status')).json();
-      if (!s.refreshing && !s.showQueued) { banner(''); return; }
+      if (!s.refreshing && !s.showQueued) { banner(RESTRICTED_BROWSER ? ESCAPE_HTML : ''); return; }
     } catch (e) { /* the radio is busy during a refresh; keep waiting */ }
   }
-  banner('');
+  banner(RESTRICTED_BROWSER ? ESCAPE_HTML : '');
 }
 
 /* ------------------------------------------------------------------- add */
@@ -500,11 +552,16 @@ $('#upload').addEventListener('click', async () => {
 });
 
 /* ------------------------------------------------------------------ boot */
-// iOS opens a captive portal in a cut-down browser that often cannot reach the
-// photo picker. Tell people how to get out of it before they hit that.
-if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone) {
-  banner('If picking a photo does not work, open <b>http://192.168.4.1</b> in Safari.');
+if (RESTRICTED_BROWSER) {
+  banner(ESCAPE_HTML);
+  const note = document.createElement('div');
+  note.className = 'escape';
+  note.innerHTML = ESCAPE_HTML;
+  $('#viewAdd').prepend(note);
+  $('#addHint').textContent =
+    'If nothing happens when you tap Choose photo, use the link above.';
 }
+
 loadPhotos();
 })();
 </script>

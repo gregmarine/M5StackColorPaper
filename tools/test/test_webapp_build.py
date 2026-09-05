@@ -87,6 +87,24 @@ class BuildOutputTest(unittest.TestCase):
         )
         self.assertEqual(common.run_jsc(program).strip(), "OK")
 
+    def test_mobile_uses_no_blocking_dialogs(self):
+        """confirm(), alert() and prompt() are unusable on the device.
+
+        iOS opens captive portals in a browser that silently suppresses them:
+        the dialog never appears and confirm() reports "cancelled". Deleting a
+        photo was gated behind confirm() and so did nothing at all on an
+        iPhone, with no error to explain it. Anything that needs a decision
+        from the user has to be in the page.
+        """
+        body = re.search(r'<script id="mobile">(.*?)</script>', self.html, re.DOTALL)
+        self.assertIsNotNone(body)
+        code = re.sub(r"//[^\n]*", "", body.group(1))
+        for call in ("confirm(", "alert(", "prompt("):
+            self.assertNotIn(
+                call, code,
+                f"the device UI calls {call}); captive-portal browsers suppress it",
+            )
+
     def test_mobile_only_uses_symbols_the_pipeline_exports(self):
         """The device UI leans on #core/#shared globals. If one is renamed
         upstream the page would fail at runtime on the phone, with the frame
@@ -138,9 +156,21 @@ class BuildFailureTest(unittest.TestCase):
         self.assertIn("SHARED", str(cm.exception))
 
     def test_remote_resource_is_an_error(self):
-        html = '<link rel="stylesheet" href="https://cdn.example.com/x.css">'
-        with self.assertRaises(BuildError):
-            check_self_contained(html, Path("app.html"))
+        for html in (
+            '<link rel="stylesheet" href="https://cdn.example.com/x.css">',
+            '<script src="https://cdn.example.com/x.js"></script>',
+            '<img src="//example.com/x.png">',
+        ):
+            with self.subTest(html=html), self.assertRaises(BuildError):
+                check_self_contained(html, Path("app.html"))
+
+    def test_link_to_the_device_itself_is_allowed(self):
+        """The app links to http://192.168.4.1 so people can escape the
+        captive-portal browser, which cannot open a file picker. That is an
+        anchor, not a resource load, and must not fail the build."""
+        check_self_contained(
+            '<a href="http://192.168.4.1/" target="_blank">Open</a>', Path("app.html")
+        )
 
 
 class ArtifactTest(unittest.TestCase):
