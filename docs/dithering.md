@@ -29,8 +29,11 @@ Consequences that drive every decision below:
 
 ## Pipeline
 
-Both tools do the same thing (`tools/prepare_photo/prepare_photo.py` and the
-JavaScript core in `photo_lab.html`, verified bit-identical):
+Three front-ends now run this pipeline: `prepare_photo.py`, the `#core` block
+of `photo_lab.html`, and the phone web app the frame serves over its hotspot
+(which is that same `#core` block, spliced in at build time — see
+[webapp.md](webapp.md)). They are held to **byte-identical output** by
+`tools/test/run.sh`, for every preset and every dither mode:
 
 1. EXIF orientation, resize/crop to 400x600 or 600x400.
 2. Tone: optional blur, 1% auto-levels, gamma, brightness, contrast,
@@ -41,6 +44,41 @@ JavaScript core in `photo_lab.html`, verified bit-identical):
 4. Dither to palette indices.
 5. Write a 4-bit BMP whose palette holds the driver's RGB values, so the
    firmware maps each index to one ink with no re-quantisation.
+
+### Keeping them identical
+
+"Byte-identical" is a stronger claim than it was, and it took making `#core`
+port Pillow's actual implementations rather than reimplement its ideas. Four
+places where the obvious JavaScript is subtly not what Pillow does, all found
+in 2026-09 when the parity check was finally scripted:
+
+- **Gaussian blur.** `ImageFilter.GaussianBlur` does not convolve a sampled
+  Gaussian. It approximates one with *three box blurs* (`libImaging/BoxBlur.c`,
+  box length from Gwosdek et al. 2011), in 24-bit fixed point, quantising back
+  to 8 bits between passes. A textbook separable kernel is a different filter.
+- **Auto levels.** `ImageOps.autocontrast` builds its LUT as `i*scale + offset`
+  and **truncates**; its cutoff eats whole histogram bins rather than counting
+  to a threshold. Assigning into a `Uint8ClampedArray` rounds, which is off by
+  one in the other direction.
+- **RGB to greyscale.** Pillow's is fixed point: `(R*19595 + G*38470 +
+  B*7471 + 32768) >> 16`.
+- **Brightness, contrast and colour.** Every `ImageEnhance` is
+  `Image.blend(degenerate, image, factor)`, which **truncates**, and for
+  factors outside 0..1 computes in 32-bit float before clipping.
+
+Each of these is off by at most one unit out of 255, which sounds ignorable
+and is not: a one-unit tone difference lands on the wrong side of a dither
+threshold often enough to change 1-2% of pixels, and with error diffusion it
+compounds to a third of them. Before the fixes the browser tool and the CLI
+disagreed on ~1.8% of pixels at the default settings — which mattered,
+because every panel test below was run through the CLI, so the browser (and
+now the phone) was not rendering quite what won.
+
+Two residual divergences are recorded and bounded rather than chased, since
+nothing ships at those settings: `smooth` at 0.75 or 1.0 (radii where the
+fixed-point box weights sum to exactly 2^24) differs by up to 2 units, and
+contrast below 1 by up to 1. The shipped default of `smooth: 0.5` and
+`contrast: 1.05` are both exact.
 
 ## Algorithms available
 

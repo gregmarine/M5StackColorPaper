@@ -724,7 +724,12 @@ def collect_inputs(inputs):
     return paths
 
 
-def main():
+def build_parser():
+    """Builds the CLI parser.
+
+    Split out of main() so the tests can obtain the real defaults rather than
+    keeping a hand-copied duplicate that silently drifts.
+    """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("inputs", nargs="*", help="Image files and/or directories of images")
     parser.add_argument("-o", "--output-dir", required=True, type=Path,
@@ -803,7 +808,11 @@ def main():
                              "renders as solid black (default: 1.4)")
     parser.add_argument("--chart", action="store_true",
                         help="Also write chart.bmp, a swatch/ramp calibration image, into the output dir")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     if args.portrait:
         args.width, args.height = 400, 600

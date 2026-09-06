@@ -14,15 +14,34 @@ power on / side button
    hal.init()  -> panel rotation 3 (landscape), 24-bit canvas in PSRAM
         |
    USB power present?
-     yes -> hold any of A/B/C for 2 s?  no  -> USB drive mode until unplugged, then power off
-                                      yes -> slideshow with serial console attached
-     no  -> slideshow
+     yes -> hold any of A/B/C for 2 s?  no  -> DRIVE mode until unplugged, then power off
+                                      yes -> SLIDESHOW with serial console attached
+     no  -> SLIDESHOW
         |
    slideshow.resume()      restore saved photo index, draw nothing
    slideshow.runInteractive(120 s)
         |
-   idle 2 min -> power off
+        +-- top key -----> HOTSPOT mode, then back to the interactive window
+        +-- USB appears -> DRIVE mode
+        +-- idle 2 min --> power off
 ```
+
+Three modes, never two at once. They are exclusive because the FAT volume has
+a single owner: it is either exported to a USB host as a mass-storage device,
+or mounted by the app, never both.
+
+| Mode | Entered when | Leaves when |
+|------|--------------|-------------|
+| Drive | USB power present at boot | USB power removed, or the top key |
+| Slideshow | no USB power at boot | 2 min idle, or the top key |
+| Hotspot | the top key, from either | the top key, 15 min idle, or 1 h total |
+
+Hotspot mode is the on-device photo manager: a WPA2 access point and a web
+app served from flash. It is documented separately in [webapp.md](webapp.md).
+Entering it detaches the device from USB (`hal_storage_usb_detach()`), which
+makes the drive disappear from the host and hands the port back to the
+USB-Serial-JTAG console — so unlike drive mode, the logs are readable while
+it runs.
 
 Key behaviours:
 
@@ -39,7 +58,8 @@ Key behaviours:
   prompt) before it configures the device. Drive mode ends when USB power
   goes away; ejecting alone does not end it.
 - **Photo list** is every `.bmp`/`.jpg`/`.jpeg`/`.png` in the root of the
-  drive, sorted by name. Hidden files (`._*` AppleDouble files that Finder
+  drive, sorted by name. That sort is also what the web app's reordering
+  manipulates, by rewriting the filenames with a `001_` prefix. Hidden files (`._*` AppleDouble files that Finder
   writes) are skipped.
 
 ## Buttons
@@ -51,10 +71,14 @@ M5Unified maps the PaperColor keys as A = GPIO 10, B = GPIO 9, C = GPIO 1
 |-----|------|---------|----------|
 | Upper side key | 10 | BtnA | Previous photo (up the list) |
 | Lower side key | 9 | BtnB | Next photo (down the list) |
-| Top-edge key | 1 | BtnC | Reserved, does nothing |
+| Top-edge key | 1 | BtnC | Open / close the photo-manager hotspot |
 | Side power button | (PM1) | – | Wake / power. Long press = ROM download mode |
 
-Each press restarts the two-minute idle timer. A quick double press is
+The top key works from both drive and slideshow mode. It cannot wake the
+device: `hal.powerOff()` is a PM1 system-off, not a sleep, so only the side
+power button starts the board. Wake first, then press the top key.
+
+Each press of a side key restarts the two-minute idle timer. A quick double press is
 coalesced into one refresh (400 ms settle) so skipping two photos costs one
 panel refresh. Presses made during a refresh are discarded.
 
@@ -130,7 +154,10 @@ board.
 ## Code map
 
 ```
-main/main.cpp                          boot flow, drive mode, interactive window
+main/main.cpp                          boot flow, the three modes, interactive window
+main/net/                              Wi-Fi AP, HTTP server, photo API, hotspot session
+main/web/app.ui.html                   the phone web app (pipeline spliced in at build time)
+components/dns_server/                 wildcard DNS for the captive portal (from ESP-IDF's example)
 main/hal/hal.cpp, hal.h                board init, PM1 power manager, RTC RAM, settings (from the M5 demo)
 main/hal/storage/                      FAT on internal flash, TinyUSB MSC, SD switching (unused)
 main/hal/utils/image/image_utils.cpp   image size probing, indexed-BMP detection
@@ -142,4 +169,12 @@ components/M5GFX, M5Unified            git submodules (panel driver Panel_ED2208
 
 Timing constants worth knowing: `INTERACTIVE_IDLE_MS` (120 s) in
 `main/main.cpp`; the 2 s key-hold window is in the same file; the 400 ms
-double-press settle is in `PhotoSlideshow::runInteractive()`.
+double-press settle is in `PhotoSlideshow::runInteractive()`; `AP_IDLE_MS`
+(15 min), `AP_MAX_SESSION_MS` (1 h) and `AP_MIN_BATTERY_MV` (3500) are in
+`main/net/ap_mode.cpp`.
+
+`runInteractive()` returns an `InteractiveExit` saying why it stopped (idle,
+aborted by USB, or the top key) so `main.cpp` can decide what happens next.
+`PhotoSlideshow` also gained `showIndex()` and `redrawCurrent()`, which the
+web app and the hotspot's exit path use to draw a specific photo and persist
+the position to RTC RAM.

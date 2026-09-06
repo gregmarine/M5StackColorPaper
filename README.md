@@ -1,7 +1,8 @@
 # M5StackColorPaper
 
 Custom ESP-IDF firmware turning the [M5Stack PaperColor](https://docs.m5stack.com/en/core/PaperColor)
-(SKU C151) into a simple USB-fed photo frame.
+(SKU C151) into a simple photo frame. Photos go on over USB, or over the
+frame's own Wi-Fi hotspot from a phone with no computer involved.
 
 ## How it works
 
@@ -14,9 +15,14 @@ Custom ESP-IDF firmware turning the [M5Stack PaperColor](https://docs.m5stack.co
 - Press the side power button: the device wakes and stays awake for two
   minutes. The panel keeps its last photo while powered off, so waking does
   not redraw anything. The two side keys step through the photos: the upper
-  key (G10) goes to the previous photo, the lower key (G9) to the next. The
-  key on the top edge (G1) is reserved. Each press restarts the two-minute
-  timer; when it expires the device powers itself off.
+  key (G10) goes to the previous photo, the lower key (G9) to the next. Each
+  press restarts the two-minute timer; when it expires the device powers
+  itself off.
+- Press the key on the top edge (G1): the frame raises a WPA2 Wi-Fi hotspot
+  and draws the network name, password and address on the panel. Join it from
+  a phone, open that address, and you get a web app where you can prepare and
+  add photos, reorder or delete them, and pick which one the frame shows. See
+  [`docs/webapp.md`](docs/webapp.md).
 
 Photo changes are always button-driven, never automatic - the panel takes
 ~15-30s to do a full-color refresh, so the device stays off between viewing
@@ -56,7 +62,9 @@ log, and hardware facts.
 
 ## Adding photos
 
-The easiest path is the browser tool: open `tools/prepare_photo/photo_lab.html`,
+The easiest path is the top key: raise the hotspot and do it from your phone
+([`docs/webapp.md`](docs/webapp.md)). From a computer, use the browser tool:
+open `tools/prepare_photo/photo_lab.html`,
 drop photos on it, pick a preset, tweak while watching the simulated panel,
 and save the BMP. See [`docs/photos.md`](docs/photos.md).
 
@@ -72,10 +80,25 @@ firmware updates. A brand-new board needs the empty filesystem written once
 with `idf.py -p <PORT> storage-flash` (the drive mounts with auto-format
 disabled).
 
+## Tests
+
+```
+tools/test/run.sh
+```
+
+Checks the things that can be checked without the panel: that the browser
+tool, the command-line tool and the phone all produce byte-identical BMPs,
+that those BMPs are shaped the way the firmware expects, and that the
+on-device web app is really built from Photo Lab's pipeline rather than a
+fork of it. Needs the venv in `tools/prepare_photo/` and macOS's `jsc`.
+
+How a photo actually *looks* is still a panel test, logged in
+[`docs/dithering.md`](docs/dithering.md).
+
 ## Out of scope (for now)
 
-microSD card support, WiFi sync, and cloud photo push are not implemented -
-this is intentionally a minimal USB-only, button-advanced photo frame. The
-storage layer already supports switching to an SD-backed drive
+microSD card support and cloud photo push are not implemented. The storage
+layer already supports switching to an SD-backed drive
 (`hal_storage_switch(APP_STORAGE_MEDIA_SDMMC)`), so SD support is a natural
-follow-up.
+follow-up. The Wi-Fi hotspot serves the photo manager only; the frame never
+joins an existing network and never talks to the internet.

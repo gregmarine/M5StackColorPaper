@@ -255,34 +255,97 @@ function rgb8ToLab(rgb, n) {   // Uint8 (n*3) -> Float64 lab (n*3). 64-bit keeps
 // ---- tone pipeline (PIL-equivalent operations on a packed RGB Uint8 buffer) ----
 function gaussianBlur(rgb, w, h, sigma) {
   if (sigma <= 0) return rgb;
-  const r = Math.max(1, Math.ceil(sigma*3)), k = new Float64Array(2*r+1);
-  let s = 0; for (let i = -r; i <= r; i++) { k[i+r] = Math.exp(-(i*i)/(2*sigma*sigma)); s += k[i+r]; }
-  for (let i = 0; i < k.length; i++) k[i] /= s;
-  const tmp = new Float32Array(w*h*3), out = new Uint8ClampedArray(w*h*3);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    let a0 = 0, a1 = 0, a2 = 0;
-    for (let i = -r; i <= r; i++) { const xx = Math.min(w-1, Math.max(0, x+i)), p = (y*w+xx)*3, kk = k[i+r]; a0 += rgb[p]*kk; a1 += rgb[p+1]*kk; a2 += rgb[p+2]*kk; }
-    const q = (y*w+x)*3; tmp[q] = a0; tmp[q+1] = a1; tmp[q+2] = a2;
-  }
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    let a0 = 0, a1 = 0, a2 = 0;
-    for (let i = -r; i <= r; i++) { const yy = Math.min(h-1, Math.max(0, y+i)), p = (yy*w+x)*3, kk = k[i+r]; a0 += tmp[p]*kk; a1 += tmp[p+1]*kk; a2 += tmp[p+2]*kk; }
-    const q = (y*w+x)*3; out[q] = a0; out[q+1] = a1; out[q+2] = a2;
-  }
-  return out;
+  // Pillow does NOT convolve a sampled Gaussian: ImagingGaussianBlur
+  // approximates one with three box blurs (libImaging/BoxBlur.c), using the
+  // box-length formula from Gwosdek et al. 2011. This is a port of that, not
+  // of the textbook Gaussian, because prepare_photo.py calls
+  // ImageFilter.GaussianBlur and the two must agree -- the panel tests in
+  // docs/dithering.md were all run through the Python tool, so it is the
+  // reference. At the shipped smooth of 0.5 this is bit-identical to Pillow.
+  const passes = 3, sigma2 = sigma * sigma / passes;
+  const L = Math.sqrt(12.0 * sigma2 + 1.0);            // [7]  box length
+  const l = Math.floor((L - 1.0) / 2.0);               // [11] integer radius
+  let a = (2 * l + 1) * (l * (l + 1) - 3 * sigma2);    // [14] fractional part
+  a /= 6 * (sigma2 - (l + 1) * (l + 1));
+  return boxBlur(rgb, w, h, l + a, passes);
 }
-function lumaOf(rgb, i) { return (rgb[i]*299 + rgb[i+1]*587 + rgb[i+2]*114) / 1000; }
+// One box-blur pass along x, with Pillow's 24-bit fixed-point weights and its
+// edge extension. The result is quantised back to 8 bits between passes, as
+// Pillow's is, which is why the arithmetic has to match this closely.
+function boxBlurPass(src, dst, w, h, radius) {
+  const ri = Math.trunc(radius);
+  const ww = Math.floor(16777216 / (radius * 2 + 1));            // whole-pixel weight
+  const fw = Math.floor((16777216 - (ri * 2 + 1) * ww) / 2);     // far-pixel weight
+  const last = w - 1, cl = x => x < 0 ? 0 : (x > last ? last : x);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let c = 0; c < 3; c++) {
+      for (let x = 0; x < w; x++) {
+        let acc = 0;
+        for (let i = -ri; i <= ri; i++) acc += src[(row + cl(x + i)) * 3 + c];
+        const bulk = acc * ww + (src[(row + cl(x - ri - 1)) * 3 + c] + src[(row + cl(x + ri + 1)) * 3 + c]) * fw;
+        // Products reach ~2^32, past what | and >>> can hold, so divide.
+        dst[(row + x) * 3 + c] = Math.floor((bulk + 8388608) / 16777216);
+      }
+    }
+  }
+}
+function transposeRgb(src, dst, w, h) {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let c = 0; c < 3; c++)
+    dst[(x * h + y) * 3 + c] = src[(y * w + x) * 3 + c];
+}
+function boxBlur(rgb, w, h, radius, passes) {
+  // n passes along x, transpose, n more along x, transpose back.
+  let a = Uint8ClampedArray.from(rgb), b = new Uint8ClampedArray(rgb.length);
+  for (let p = 0; p < passes; p++) { boxBlurPass(a, b, w, h, radius); [a, b] = [b, a]; }
+  transposeRgb(a, b, w, h); [a, b] = [b, a];
+  for (let p = 0; p < passes; p++) { boxBlurPass(a, b, h, w, radius); [a, b] = [b, a]; }
+  transposeRgb(a, b, h, w); [a, b] = [b, a];
+  return a;
+}
+// PIL's RGB->L (Convert.c): fixed point, rounded. Used wherever Pillow would
+// have called convert("L") -- the autocontrast histogram, the contrast mean,
+// and the greyscale that saturation blends against.
+function lumaOf(rgb, i) { return (rgb[i]*19595 + rgb[i+1]*38470 + rgb[i+2]*7471 + 32768) >> 16; }
+// Image.blend(degenerate, image, factor) from Blend.c, which is what every
+// ImageEnhance operation reduces to. Two things here are easy to get wrong and
+// both move dither decisions: the result is TRUNCATED, not rounded (assigning
+// into a Uint8ClampedArray would round), and the extrapolating branch used for
+// factors outside 0..1 computes in 32-bit float before clipping.
+function blend8(base, value, factor) {
+  if (factor >= 0 && factor <= 1) return Math.trunc(base + factor*(value - base));
+  const t = Math.fround(base + factor*(value - base));
+  return t <= 0 ? 0 : (t >= 255 ? 255 : Math.trunc(t));
+}
 function applyLut(rgb, lut) { const n = rgb.length; for (let i = 0; i < n; i++) rgb[i] = lut[rgb[i]]; }
 function autoLevels(rgb, n, cutoff) {
-  // PIL ImageOps.autocontrast(cutoff, preserve_tone=True): histogram of L, same LUT on all bands.
-  const hist = new Int32Array(256);
-  for (let i = 0; i < n; i++) hist[Math.round(lumaOf(rgb, i*3))]++;
-  const cut = n*cutoff/100;
-  let lo = 0, acc = 0; while (lo < 255 && acc + hist[lo] <= cut) { acc += hist[lo]; lo++; }
-  let hi = 255; acc = 0; while (hi > 0 && acc + hist[hi] <= cut) { acc += hist[hi]; hi--; }
+  // Port of PIL ImageOps.autocontrast(cutoff, preserve_tone=True), including
+  // the parts that look like details and are not: the cutoff eats whole
+  // histogram bins rather than counting to a threshold, the LUT is built as
+  // i*scale + offset (not (i-lo)*scale, which rounds differently), and it
+  // truncates where a clamped array would round. prepare_photo.py calls the
+  // real thing, so this has to be the same function, not the same idea.
+  const h = new Int32Array(256);
+  for (let i = 0; i < n; i++) h[lumaOf(rgb, i*3)]++;
+  if (cutoff) {
+    let total = 0; for (let i = 0; i < 256; i++) total += h[i];
+    for (const fromLow of [true, false]) {
+      let cut = Math.floor(total * cutoff / 100);
+      for (let k = 0; k < 256; k++) {
+        const i = fromLow ? k : 255 - k;
+        if (cut > h[i]) { cut -= h[i]; h[i] = 0; } else { h[i] -= cut; cut = 0; }
+        if (cut <= 0) break;
+      }
+    }
+  }
+  let lo = 0; while (lo < 255 && !h[lo]) lo++;
+  let hi = 255; while (hi > 0 && !h[hi]) hi--;
   if (hi <= lo) return;
-  const scale = 255/(hi - lo), lut = new Uint8ClampedArray(256);
-  for (let i = 0; i < 256; i++) lut[i] = (i - lo)*scale;
+  const scale = 255.0/(hi - lo), offset = -lo*scale, lut = new Uint8ClampedArray(256);
+  for (let i = 0; i < 256; i++) {
+    const v = Math.trunc(i*scale + offset);
+    lut[i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+  }
   applyLut(rgb, lut);
 }
 function adjustTone(rgb, w, h, p) {
@@ -290,13 +353,15 @@ function adjustTone(rgb, w, h, p) {
   if (p.smooth > 0) rgb = gaussianBlur(rgb, w, h, p.smooth);
   if (p.autoLevels === '1' || p.autoLevels === 1 || p.autoLevels === true) autoLevels(rgb, n, 1);
   if (p.gamma !== 1) { const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = Math.round(255*Math.pow(i/255, 1/p.gamma)); applyLut(rgb, lut); }
-  if (p.brightness !== 1) { const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = i*p.brightness; applyLut(rgb, lut); }
+  if (p.brightness !== 1) { const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = blend8(0, i, p.brightness); applyLut(rgb, lut); }
   if (p.contrast !== 1) {
-    let mean = 0; for (let i = 0; i < n; i++) mean += lumaOf(rgb, i*3); mean = Math.round(mean/n);
-    const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = (i - mean)*p.contrast + mean; applyLut(rgb, lut);
+    // ImageStat.Stat(image.convert("L")).mean[0], then int(mean + 0.5).
+    let sum = 0; for (let i = 0; i < n; i++) sum += lumaOf(rgb, i*3);
+    const mean = Math.floor(sum/n + 0.5);
+    const lut = new Uint8ClampedArray(256); for (let i = 0; i < 256; i++) lut[i] = blend8(mean, i, p.contrast); applyLut(rgb, lut);
   }
   if (p.saturation !== 1) {
-    for (let i = 0; i < n; i++) { const q = i*3, l = lumaOf(rgb, q); rgb[q] = l + (rgb[q]-l)*p.saturation; rgb[q+1] = l + (rgb[q+1]-l)*p.saturation; rgb[q+2] = l + (rgb[q+2]-l)*p.saturation; }
+    for (let i = 0; i < n; i++) { const q = i*3, l = lumaOf(rgb, q); rgb[q] = blend8(l, rgb[q], p.saturation); rgb[q+1] = blend8(l, rgb[q+1], p.saturation); rgb[q+2] = blend8(l, rgb[q+2], p.saturation); }
   }
   const gains = [+p.hueRed, +p.hueYellow, +p.hueGreen, +p.hueBlue], lean = +p.greenLean || 0;
   if (gains.some(g => g !== 1) || lean !== 0) {
@@ -466,6 +531,96 @@ function writeBmp4(w, h, idx, palette) {
 if (typeof module !== 'undefined') module.exports = { PANEL_PALETTE, DEFAULT_PARAMS, adjustTone, ditherToIndices, writeBmp4, gaussianBlur, rgb8ToLab };
 </script>
 
+<script id="shared">
+// ===================== Shared browser helpers =====================
+// Everything here needs a DOM (canvas, Worker, Blob) so it can't live in
+// #core, but it is UI-chrome-free so both this tool and the on-device web
+// app (main/web/app.ui.html) can use it. tools/build_webapp.py extracts
+// #core and #shared from this file, which is why they must stay free of any
+// reference to this page's own markup. Keep it that way: if a function here
+// starts reaching for #status or #cOrig, it belongs in #ui instead.
+'use strict';
+
+// Crops/scales a decoded bitmap onto the panel's 400x600 (or 600x400) canvas
+// and returns packed RGB ready for adjustTone().
+function fitBitmap(bitmap, p) {
+  let W, H;
+  const portrait = p.orientation === 'portrait' || (p.orientation === 'auto' && bitmap.height > bitmap.width);
+  if (portrait) { W = 400; H = 600; } else { W = 600; H = 400; }
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  let sx = 0, sy = 0, sw = bitmap.width, sh = bitmap.height, dx = 0, dy = 0, dw = W, dh = H;
+  if (p.fit === 'cover') {
+    const sr = sw/sh, dr = W/H;
+    if (sr > dr) { const nw = Math.round(sh*dr); sx = Math.round((sw - nw)*p.anchor); sw = nw; }
+    else { const nh = Math.round(sw/dr); sy = Math.round((sh - nh)*p.anchor); sh = nh; }
+  } else {
+    const s = Math.min(W/sw, H/sh); dw = Math.max(1, Math.round(sw*s)); dh = Math.max(1, Math.round(sh*s)); dx = (W - dw) >> 1; dy = (H - dh) >> 1;
+  }
+  // Two-stage downscale for quality on big phone photos.
+  let src = bitmap, ssx = sx, ssy = sy, ssw = sw, ssh = sh;
+  if (sw > dw*2.5) {
+    const mid = document.createElement('canvas'); mid.width = dw*2; mid.height = dh*2;
+    const mctx = mid.getContext('2d'); mctx.imageSmoothingEnabled = true; mctx.imageSmoothingQuality = 'high';
+    mctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, mid.width, mid.height);
+    src = mid; ssx = 0; ssy = 0; ssw = mid.width; ssh = mid.height;
+  }
+  ctx.drawImage(src, ssx, ssy, ssw, ssh, dx, dy, dw, dh);
+  const id = ctx.getImageData(0, 0, W, H), rgb = new Uint8ClampedArray(W*H*3);
+  for (let i = 0, j = 0; i < id.data.length; i += 4, j += 3) { rgb[j] = id.data[i]; rgb[j+1] = id.data[i+1]; rgb[j+2] = id.data[i+2]; }
+  return { W, H, rgb, canvas: c };
+}
+
+function burnLabel(rgb, W, H, text) {
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const ctx = c.getContext('2d');
+  const id = ctx.createImageData(W, H); for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) { id.data[i] = rgb[j]; id.data[i+1] = rgb[j+1]; id.data[i+2] = rgb[j+2]; id.data[i+3] = 255; }
+  ctx.putImageData(id, 0, 0);
+  ctx.font = '600 16px -apple-system, Helvetica, Arial, sans-serif'; ctx.textBaseline = 'alphabetic';
+  const tw = ctx.measureText(text).width, th = 16, x = W - tw - 12, y = H - 12;
+  ctx.fillStyle = '#fff'; ctx.fillRect(x - 6, y - th - 4, tw + 12, th + 10); ctx.fillStyle = '#000'; ctx.fillText(text, x, y);
+  const out = ctx.getImageData(0, 0, W, H); for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) { rgb[j] = out.data[i]; rgb[j+1] = out.data[i+1]; rgb[j+2] = out.data[i+2]; }
+}
+
+// Reads back a 4-bit indexed BMP written by writeBmp4(). Browsers decode
+// 4bpp indexed BMPs inconsistently, so the device web app parses them here
+// and paints the indices with the measured inks to preview what the panel
+// actually shows.
+function decodeBmp4(buffer) {
+  const u8 = new Uint8Array(buffer), dv = new DataView(buffer);
+  if (u8[0] !== 0x42 || u8[1] !== 0x4D) throw new Error('not a BMP');
+  const off = dv.getUint32(10, true), w = dv.getInt32(18, true), rawH = dv.getInt32(22, true);
+  if (dv.getUint16(28, true) !== 4) throw new Error('not 4bpp');
+  const h = Math.abs(rawH), bottomUp = rawH > 0;
+  const rowBytes = (((w*4 + 31) / 32) | 0) * 4;
+  const idx = new Uint8Array(w*h);
+  for (let row = 0; row < h; row++) {
+    const y = bottomUp ? h - 1 - row : row;
+    const o = off + row*rowBytes, base = y*w;
+    for (let x = 0; x < w; x++) {
+      const b = u8[o + (x >> 1)];
+      idx[base + x] = (x & 1) ? (b & 0x0F) : (b >> 4);
+    }
+  }
+  return { w, h, idx };
+}
+
+// Tone + dither run in a Worker built from the #core script so the UI stays
+// responsive during a 0.2-1 s render. Both front-ends share the same shim so
+// the worker protocol can't drift between them.
+function coreWorkerSource() {
+  return document.getElementById('core').textContent + `
+    self.onmessage = e => { const { rgb, W, H, p, pal, seq, t0 } = e.data;
+      try { const adj = adjustTone(rgb, W, H, p); const idx = ditherToIndices(adj, W, H, pal, p);
+        self.postMessage({ seq, idx, adj, W, H, t0 }, [idx.buffer, adj.buffer]); }
+      catch (err) { self.postMessage({ seq, error: err.message }); } };`;
+}
+function makeCoreWorker() {
+  return new Worker(URL.createObjectURL(new Blob([coreWorkerSource()], { type: 'text/javascript' })));
+}
+</script>
+
 <script id="ui">
 // ===================== UI =====================
 (() => {
@@ -604,58 +759,14 @@ document.addEventListener('dragleave', e => { e.preventDefault(); if (--dragDept
 document.addEventListener('dragover', e => e.preventDefault());
 document.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('on'); addFiles(Array.from(e.dataTransfer.files)); });
 
-// ---- fit / resample ----
-function fitBitmap(bitmap, p) {
-  let W, H;
-  const portrait = p.orientation === 'portrait' || (p.orientation === 'auto' && bitmap.height > bitmap.width);
-  if (portrait) { W = 400; H = 600; } else { W = 600; H = 400; }
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
-  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-  let sx = 0, sy = 0, sw = bitmap.width, sh = bitmap.height, dx = 0, dy = 0, dw = W, dh = H;
-  if (p.fit === 'cover') {
-    const sr = sw/sh, dr = W/H;
-    if (sr > dr) { const nw = Math.round(sh*dr); sx = Math.round((sw - nw)*p.anchor); sw = nw; }
-    else { const nh = Math.round(sw/dr); sy = Math.round((sh - nh)*p.anchor); sh = nh; }
-  } else {
-    const s = Math.min(W/sw, H/sh); dw = Math.max(1, Math.round(sw*s)); dh = Math.max(1, Math.round(sh*s)); dx = (W - dw) >> 1; dy = (H - dh) >> 1;
-  }
-  // Two-stage downscale for quality on big phone photos.
-  let src = bitmap, ssx = sx, ssy = sy, ssw = sw, ssh = sh;
-  if (sw > dw*2.5) {
-    const mid = document.createElement('canvas'); mid.width = dw*2; mid.height = dh*2;
-    const mctx = mid.getContext('2d'); mctx.imageSmoothingEnabled = true; mctx.imageSmoothingQuality = 'high';
-    mctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, mid.width, mid.height);
-    src = mid; ssx = 0; ssy = 0; ssw = mid.width; ssh = mid.height;
-  }
-  ctx.drawImage(src, ssx, ssy, ssw, ssh, dx, dy, dw, dh);
-  const id = ctx.getImageData(0, 0, W, H), rgb = new Uint8ClampedArray(W*H*3);
-  for (let i = 0, j = 0; i < id.data.length; i += 4, j += 3) { rgb[j] = id.data[i]; rgb[j+1] = id.data[i+1]; rgb[j+2] = id.data[i+2]; }
-  return { W, H, rgb, canvas: c };
-}
-function burnLabel(rgb, W, H, text) {
-  const c = document.createElement('canvas'); c.width = W; c.height = H; const ctx = c.getContext('2d');
-  const id = ctx.createImageData(W, H); for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) { id.data[i] = rgb[j]; id.data[i+1] = rgb[j+1]; id.data[i+2] = rgb[j+2]; id.data[i+3] = 255; }
-  ctx.putImageData(id, 0, 0);
-  ctx.font = '600 16px -apple-system, Helvetica, Arial, sans-serif'; ctx.textBaseline = 'alphabetic';
-  const tw = ctx.measureText(text).width, th = 16, x = W - tw - 12, y = H - 12;
-  ctx.fillStyle = '#fff'; ctx.fillRect(x - 6, y - th - 4, tw + 12, th + 10); ctx.fillStyle = '#000'; ctx.fillText(text, x, y);
-  const out = ctx.getImageData(0, 0, W, H); for (let i = 0, j = 0; j < rgb.length; i += 4, j += 3) { rgb[j] = out.data[i]; rgb[j+1] = out.data[i+1]; rgb[j+2] = out.data[i+2]; }
-}
-
 // ---- render ----
-// Tone + dither run in a Web Worker built from the #core script, so slider
-// drags stay responsive while a 0.2-1 s render is in flight. Only one render
-// is in flight at a time; the newest request replaces any queued one.
+// fitBitmap/burnLabel and the worker construction live in #shared, so the
+// on-device web app uses exactly the same resize, crop and dither path.
+// Only one render is in flight at a time; the newest request replaces any
+// queued one.
 let worker = null, inflight = null, queued = null, seq = 0;
 function makeWorker() {
-  const src = $('#core').textContent + `
-    self.onmessage = e => { const { rgb, W, H, p, pal, seq, t0 } = e.data;
-      try { const adj = adjustTone(rgb, W, H, p); const idx = ditherToIndices(adj, W, H, pal, p);
-        self.postMessage({ seq, idx, adj, W, H, t0 }, [idx.buffer, adj.buffer]); }
-      catch (err) { self.postMessage({ seq, error: err.message }); } };`;
-  const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  const w = makeCoreWorker();
   w.onmessage = e => {
     const m = e.data; inflight = null;
     if (m.error) status('Render failed: ' + m.error, true);

@@ -1,0 +1,563 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PaperColor</title>
+<!--
+  The on-device photo manager, served by the frame's own Wi-Fi hotspot.
+
+  This file is NOT served as-is. tools/build_webapp.py splices the #core and
+  #shared script blocks out of tools/prepare_photo/photo_lab.html into the
+  placeholders below, so the phone runs exactly the same dither pipeline as
+  the desktop Photo Lab and the command-line tool. The parity tests in
+  tools/test hold all three to byte-identical output. Edit the pipeline
+  there, never here.
+
+  The page must stay fully self-contained: the frame has no internet and the
+  phone is on an isolated AP, so a CDN reference would simply never load.
+  build_webapp.py fails the build if it finds one.
+-->
+<style>
+  :root {
+    --bg: #f3f2ee; --panel: #fff; --ink: #1d1d1b; --muted: #6b6a66; --line: #d9d7d0;
+    --accent: #2f5fd6; --accent-ink: #fff; --warn: #a33;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    position: sticky; top: 0; z-index: 5; background: var(--panel);
+    border-bottom: 1px solid var(--line); padding: env(safe-area-inset-top) 0 0;
+  }
+  .tabs { display: flex; }
+  .tabs button {
+    flex: 1; border: 0; background: none; font: inherit; font-weight: 600;
+    padding: 14px 8px; color: var(--muted); border-bottom: 3px solid transparent;
+  }
+  .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+  main { padding: 14px; max-width: 640px; margin: 0 auto; }
+  h2 { font-size: 15px; margin: 18px 0 8px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .err { color: var(--warn); }
+
+  button, .btn {
+    font: inherit; padding: 10px 14px; border: 1px solid var(--line);
+    background: var(--panel); border-radius: 8px; color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .45; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+  .row > label { flex: 0 0 96px; font-size: 14px; }
+  .row input[type=range] { flex: 1; min-width: 0; }
+  .row select, .row input[type=text] { flex: 1; min-width: 0; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .row .val { flex: 0 0 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+  details { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 12px 0; background: var(--panel); }
+  summary { font-weight: 600; padding: 4px 0; cursor: pointer; }
+
+  /* storage */
+  #bar { height: 10px; border-radius: 5px; background: #e3e1da; overflow: hidden; margin: 6px 0; }
+  #barFill { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  #barFill.full { background: var(--warn); }
+
+  /* library */
+  .card { display: flex; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 10px 0; }
+  .card canvas { width: 72px; height: 72px; object-fit: contain; background: #fff; border: 1px solid var(--line); border-radius: 4px; flex: 0 0 auto; }
+  .card .meta { flex: 1; min-width: 0; }
+  .card .name { font-size: 14px; word-break: break-all; }
+  .card .sub { font-size: 12px; color: var(--muted); }
+  .card .acts { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; }
+  .card .acts button { padding: 6px 10px; font-size: 14px; }
+  .card.current { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(47,95,214,.15); }
+
+  #preview { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); background: #fff; margin: 10px auto; image-rendering: auto; }
+  #banner { background: #fff5d6; border: 1px solid #e4d08a; border-radius: 8px; padding: 10px 12px; font-size: 14px; margin-bottom: 12px; }
+  #banner a, .escape a { color: var(--accent); font-weight: 600; }
+  .escape { background: #fff5d6; border: 1px solid #e4d08a; border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 12px 0; }
+  .card .acts button.armed { background: var(--warn); color: #fff; border-color: var(--warn); }
+  .hidden { display: none !important; }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom)); background: #222; color: #fff; padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 20; max-width: 90%; }
+</style>
+
+<header>
+  <div class="tabs" role="tablist">
+    <button id="tabLibrary" role="tab" aria-selected="true">Library</button>
+    <button id="tabAdd" role="tab" aria-selected="false">Add photo</button>
+  </div>
+</header>
+
+<main>
+  <section id="viewLibrary">
+    <div id="banner" class="hidden"></div>
+    <div class="muted" id="storageText">Storage&hellip;</div>
+    <div id="bar"><div id="barFill"></div></div>
+    <div id="list"></div>
+    <div class="row hidden" id="orderRow">
+      <button id="saveOrder" class="primary">Save this order</button>
+      <button id="cancelOrder">Undo</button>
+    </div>
+  </section>
+
+  <section id="viewAdd" class="hidden">
+    <div class="row">
+      <label for="file">Photo</label>
+      <input type="file" id="file" accept="image/*">
+    </div>
+    <div class="muted" id="addHint">Pick a photo. It is prepared here on your phone, then sent to the frame.</div>
+
+    <canvas id="preview" width="600" height="400"></canvas>
+    <div class="muted" id="renderInfo"></div>
+
+    <div class="row">
+      <label for="preset">Look</label>
+      <select id="preset"></select>
+    </div>
+    <div class="row">
+      <label for="orientation">Shape</label>
+      <select id="orientation" data-p="orientation">
+        <option value="auto">Match the photo</option>
+        <option value="landscape">Landscape</option>
+        <option value="portrait">Portrait</option>
+      </select>
+    </div>
+
+    <details>
+      <summary>Adjust</summary>
+      <div class="row"><label for="anchor">Crop</label><input type="range" id="anchor" data-p="anchor" min="0" max="1" step="0.05"><span class="val" id="anchorVal"></span></div>
+      <div class="row"><label for="gamma">Brightness</label><input type="range" id="gamma" data-p="gamma" min="0.6" max="2.4" step="0.05"><span class="val" id="gammaVal"></span></div>
+      <div class="row"><label for="contrast">Contrast</label><input type="range" id="contrast" data-p="contrast" min="0.5" max="1.6" step="0.01"><span class="val" id="contrastVal"></span></div>
+      <div class="row"><label for="saturation">Colour</label><input type="range" id="saturation" data-p="saturation" min="0" max="2.5" step="0.05"><span class="val" id="saturationVal"></span></div>
+      <div class="muted">These are the same controls as the desktop Photo Lab, and the presets are the ones that won a panel test.</div>
+    </details>
+
+    <div class="row">
+      <label for="name">Name</label>
+      <input type="text" id="name" placeholder="beach.bmp">
+    </div>
+    <div class="row">
+      <button id="upload" class="primary" disabled>Send to the frame</button>
+    </div>
+  </section>
+</main>
+
+<!--@CORE-->
+<!--@SHARED-->
+
+<script id="mobile">
+// ===================== Mobile UI =====================
+// Thin on purpose: every pixel decision lives in #core, and this file only
+// gathers parameters, shows the result, and talks to the device's HTTP API.
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+
+// The frame passes the phone's connectivity checks, so no sign-in window
+// should open and this app should normally be running in a real browser. Some
+// in-app browsers are still stripped-down WebViews that cannot open a file
+// picker, though, so keep a quiet note rather than letting a dead button be
+// the first sign.
+//
+//   CaptiveNetworkSupport  iOS's captive-portal browser identifies itself
+//   "; wv"                 the standard Android WebView marker
+const RESTRICTED_BROWSER =
+  /CaptiveNetworkSupport/i.test(navigator.userAgent) || /;\s*wv[;)]/i.test(navigator.userAgent);
+
+const ESCAPE_HTML =
+  'If choosing a photo does nothing, this browser cannot open your photo library. ' +
+  'Open <a href="http://192.168.4.1/">http://192.168.4.1</a> in Chrome or Safari.';
+
+let photos = [];          // [{name, bytes}] in the frame's display order
+let orderDirty = false;
+let savedOrder = null;
+let bitmap = null;        // the picked photo, decoded
+let lastResult = null;    // {W, H, idx}
+let worker = null, inflight = false, queued = false, seq = 0;
+let renderTimer = null;
+
+/* ---------------------------------------------------------------- helpers */
+function toast(message, isError) {
+  const existing = $('#toast');
+  if (existing) existing.remove();
+  const el = document.createElement('div');
+  el.id = 'toast';
+  el.textContent = message;
+  if (isError) el.style.background = '#a33';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), isError ? 5200 : 2600);
+}
+function banner(html) {
+  const el = $('#banner');
+  el.innerHTML = html;
+  el.classList.toggle('hidden', !html);
+}
+const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB';
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.text()).slice(0, 160) || detail; } catch (e) {}
+    throw new Error(detail);
+  }
+  return res;
+}
+
+/* ------------------------------------------------------------------ tabs */
+function showTab(which) {
+  const library = which === 'library';
+  $('#tabLibrary').setAttribute('aria-selected', String(library));
+  $('#tabAdd').setAttribute('aria-selected', String(!library));
+  $('#viewLibrary').classList.toggle('hidden', !library);
+  $('#viewAdd').classList.toggle('hidden', library);
+}
+$('#tabLibrary').addEventListener('click', () => showTab('library'));
+$('#tabAdd').addEventListener('click', () => showTab('add'));
+
+/* --------------------------------------------------------------- library */
+async function loadStorage() {
+  try {
+    const info = await (await api('/api/storage')).json();
+    const pct = info.total ? Math.round(100 * info.used / info.total) : 0;
+    // ~176 KB per photo at 400x600, 4 bits per pixel.
+    const room = Math.max(0, Math.floor((info.free - 65536) / 180000));
+    $('#storageText').textContent =
+      `${fmtBytes(info.used)} of ${fmtBytes(info.total)} used — room for about ${room} more`;
+    const fill = $('#barFill');
+    fill.style.width = pct + '%';
+    fill.classList.toggle('full', pct > 90);
+  } catch (e) {
+    $('#storageText').textContent = 'Could not read storage: ' + e.message;
+  }
+}
+
+// Thumbnails are decoded here rather than handed to <img>: these are 4-bit
+// indexed BMPs, which browsers decode inconsistently, and painting the indices
+// with SIM_ESTIMATE shows the panel's real ink colours rather than the
+// driver's addressing values.
+async function drawThumb(canvas, name) {
+  try {
+    const buf = await (await api('/photo/' + encodeURIComponent(name))).arrayBuffer();
+    const { w, h, idx } = decodeBmp4(buf);
+    const scale = Math.max(1, Math.ceil(Math.max(w, h) / 144));
+    const tw = Math.max(1, Math.round(w / scale)), th = Math.max(1, Math.round(h / scale));
+    canvas.width = tw; canvas.height = th;
+    const ctx = canvas.getContext('2d');
+    const image = ctx.createImageData(tw, th);
+    for (let y = 0; y < th; y++) {
+      for (let x = 0; x < tw; x++) {
+        const c = SIM_ESTIMATE[idx[Math.min(h - 1, y * scale) * w + Math.min(w - 1, x * scale)]] || [255, 255, 255];
+        const o = (y * tw + x) * 4;
+        image.data[o] = c[0]; image.data[o + 1] = c[1]; image.data[o + 2] = c[2]; image.data[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+  } catch (e) {
+    canvas.replaceWith(Object.assign(document.createElement('div'), { className: 'muted', textContent: '?' }));
+  }
+}
+
+const lazy = new IntersectionObserver(entries => {
+  // A full library is ~9 MB of BMPs; only fetch a thumbnail once its card is
+  // actually on screen.
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    lazy.unobserve(entry.target);
+    drawThumb(entry.target, entry.target.dataset.name);
+  }
+}, { rootMargin: '200px' });
+
+function renderList() {
+  const list = $('#list');
+  armed = null;   // the buttons holding that state are about to be replaced
+  list.innerHTML = '';
+  if (!photos.length) {
+    list.innerHTML = '<p class="muted">No photos on the frame yet. Use <b>Add photo</b>.</p>';
+    return;
+  }
+  photos.forEach((photo, i) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 72; canvas.height = 72;
+    canvas.dataset.name = photo.name;
+    lazy.observe(canvas);
+    card.appendChild(canvas);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML = `<div class="name"></div><div class="sub">${i + 1} of ${photos.length} · ${fmtBytes(photo.bytes)}</div>`;
+    meta.querySelector('.name').textContent = photo.name;
+    card.appendChild(meta);
+
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    acts.appendChild(makeButton('Show', () => showOnFrame(i)));
+    const move = document.createElement('div');
+    move.style.display = 'flex';
+    move.style.gap = '4px';
+    move.appendChild(makeButton('↑', () => movePhoto(i, -1), i === 0));
+    move.appendChild(makeButton('↓', () => movePhoto(i, 1), i === photos.length - 1));
+    acts.appendChild(move);
+    acts.appendChild(makeDeleteButton(photo.name));
+    card.appendChild(acts);
+
+    list.appendChild(card);
+  });
+}
+function makeButton(label, onClick, disabled) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.disabled = !!disabled;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+async function loadPhotos() {
+  try {
+    photos = (await (await api('/api/photos')).json()).photos || [];
+    orderDirty = false;
+    $('#orderRow').classList.add('hidden');
+    renderList();
+    loadStorage();
+  } catch (e) {
+    $('#list').innerHTML = '<p class="err">Could not reach the frame: ' + e.message + '</p>';
+  }
+}
+
+// Reordering is renaming on the device, so it is not applied per tap: the list
+// is rearranged locally and committed once.
+function movePhoto(i, delta) {
+  const j = i + delta;
+  if (j < 0 || j >= photos.length) return;
+  if (!orderDirty) savedOrder = photos.slice();
+  [photos[i], photos[j]] = [photos[j], photos[i]];
+  orderDirty = true;
+  $('#orderRow').classList.remove('hidden');
+  renderList();
+}
+$('#saveOrder').addEventListener('click', async () => {
+  try {
+    await api('/api/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(photos.map(p => p.name)),
+    });
+    toast('Order saved');
+    loadPhotos();
+  } catch (e) { toast('Could not save the order: ' + e.message, true); }
+});
+$('#cancelOrder').addEventListener('click', () => {
+  if (savedOrder) photos = savedOrder;
+  orderDirty = false;
+  $('#orderRow').classList.add('hidden');
+  renderList();
+});
+
+// Deleting takes two taps rather than a confirm() dialog. iOS opens captive
+// portals in a browser that silently suppresses confirm() -- it never shows
+// the dialog and reports "cancelled" -- so Delete did nothing at all there,
+// with no error to explain why. An in-page confirmation cannot be suppressed,
+// and is a better target on a phone anyway.
+let armed = null;   // {name, disarm}
+
+function makeDeleteButton(name) {
+  const button = document.createElement('button');
+  button.textContent = 'Delete';
+  const disarm = () => {
+    clearTimeout(button._timer);
+    button.textContent = 'Delete';
+    button.classList.remove('armed');
+    if (armed && armed.name === name) armed = null;
+  };
+  button.addEventListener('click', () => {
+    if (armed && armed.name === name) {
+      disarm();
+      deletePhoto(name);
+      return;
+    }
+    if (armed) armed.disarm();
+    armed = { name, disarm };
+    button.textContent = 'Sure?';
+    button.classList.add('armed');
+    // Disarm on its own, so a stray tap does not leave a live delete button
+    // waiting for the next one.
+    button._timer = setTimeout(disarm, 5000);
+  });
+  return button;
+}
+
+async function deletePhoto(name) {
+  try {
+    await api('/api/photos/' + encodeURIComponent(name), { method: 'DELETE' });
+    toast('Deleted');
+    loadPhotos();
+  } catch (e) { toast('Could not delete: ' + e.message, true); }
+}
+
+async function showOnFrame(index) {
+  try {
+    await api('/api/show?index=' + index, { method: 'POST' });
+    banner('Drawing that photo on the frame. A colour refresh takes 15–30 seconds.');
+    pollRefresh();
+  } catch (e) { toast('Could not show that photo: ' + e.message, true); }
+}
+async function pollRefresh() {
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      const s = await (await api('/api/status')).json();
+      if (!s.refreshing && !s.showQueued) { banner(''); return; }
+    } catch (e) { /* the radio is busy during a refresh; keep waiting */ }
+  }
+  banner('');
+}
+
+/* ------------------------------------------------------------------- add */
+const PARAM_IDS = ['orientation', 'anchor', 'gamma', 'contrast', 'saturation'];
+function readParams() {
+  const p = { ...DEFAULT_PARAMS, ...(currentPreset().params || {}) };
+  for (const id of PARAM_IDS) {
+    const el = document.getElementById(id);
+    p[el.dataset.p] = el.type === 'range' ? +el.value : el.value;
+  }
+  return p;
+}
+function currentPreset() {
+  return BUILTIN_PRESETS.find(p => p.name === $('#preset').value) || BUILTIN_PRESETS[0];
+}
+function applyPresetToControls() {
+  const p = { ...DEFAULT_PARAMS, ...(currentPreset().params || {}) };
+  for (const id of PARAM_IDS) {
+    const el = document.getElementById(id);
+    if (el.dataset.p in p) el.value = p[el.dataset.p];
+  }
+  syncValues();
+}
+function syncValues() {
+  for (const id of ['anchor', 'gamma', 'contrast', 'saturation']) {
+    const el = document.getElementById(id);
+    document.getElementById(id + 'Val').textContent = (+el.value).toFixed(2).replace(/0$/, '');
+  }
+}
+
+BUILTIN_PRESETS.forEach(p => {
+  const option = document.createElement('option');
+  option.value = p.name; option.textContent = p.name;
+  $('#preset').appendChild(option);
+});
+$('#preset').addEventListener('change', () => { applyPresetToControls(); scheduleRender(); });
+for (const id of PARAM_IDS) {
+  document.getElementById(id).addEventListener('input', () => { syncValues(); scheduleRender(); });
+}
+applyPresetToControls();
+
+$('#file').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  $('#addHint').textContent = 'Decoding…';
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch (err) {
+    // Chrome on Android cannot decode HEIC; Safari can.
+    $('#addHint').innerHTML = '<span class="err">Could not read that photo. If it is a HEIC, try taking or saving it as a JPEG.</span>';
+    return;
+  }
+  $('#addHint').textContent = `${bitmap.width}×${bitmap.height}`;
+  if (!$('#name').value) {
+    $('#name').value = file.name.replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 40) + '.bmp';
+  }
+  render();
+});
+
+function makeWorker() {
+  const w = makeCoreWorker();
+  w.onmessage = e => {
+    const m = e.data;
+    inflight = false;
+    if (m.error) {
+      $('#renderInfo').innerHTML = '<span class="err">Could not prepare that photo: ' + m.error + '</span>';
+    } else if (m.seq === seq) {
+      lastResult = { W: m.W, H: m.H, idx: m.idx };
+      drawPreview();
+      $('#renderInfo').textContent = `${m.W}×${m.H}, prepared in ${Math.round(performance.now() - m.t0)} ms`;
+      $('#upload').disabled = false;
+    }
+    if (queued) { queued = false; render(); }
+  };
+  w.onerror = () => { inflight = false; };
+  return w;
+}
+function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(render, 120); }
+function render() {
+  if (!bitmap) return;
+  if (inflight) { queued = true; return; }
+  const p = readParams();
+  const fit = fitBitmap(bitmap, p);
+  $('#renderInfo').textContent = 'Preparing…';
+  $('#upload').disabled = true;
+  if (!worker) worker = makeWorker();
+  inflight = true;
+  // The BMP always addresses inks by the driver's table; only the palette the
+  // dither matches against changes.
+  const pal = p.matchInks === 'calibrated' ? SIM_ESTIMATE : PANEL_PALETTE;
+  worker.postMessage({ rgb: fit.rgb, W: fit.W, H: fit.H, p, pal, seq: ++seq, t0: performance.now() },
+                     [fit.rgb.buffer]);
+}
+function drawPreview() {
+  const { W, H, idx } = lastResult;
+  const canvas = $('#preview');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(W, H);
+  for (let i = 0; i < idx.length; i++) {
+    const c = SIM_ESTIMATE[idx[i]] || [255, 255, 255];
+    const o = i * 4;
+    image.data[o] = c[0]; image.data[o + 1] = c[1]; image.data[o + 2] = c[2]; image.data[o + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
+$('#upload').addEventListener('click', async () => {
+  if (!lastResult) return;
+  let name = $('#name').value.trim() || 'photo.bmp';
+  if (!/\.bmp$/i.test(name)) name += '.bmp';
+  const button = $('#upload');
+  button.disabled = true;
+  button.textContent = 'Sending…';
+  try {
+    const buf = writeBmp4(lastResult.W, lastResult.H, lastResult.idx, PANEL_PALETTE);
+    await api('/api/photos?name=' + encodeURIComponent(name), {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/bmp' },
+      body: buf,
+    });
+    toast('Added to the frame');
+    $('#file').value = ''; $('#name').value = '';
+    bitmap = null; lastResult = null;
+    $('#preview').getContext('2d').clearRect(0, 0, $('#preview').width, $('#preview').height);
+    $('#renderInfo').textContent = '';
+    $('#addHint').textContent = 'Pick a photo. It is prepared here on your phone, then sent to the frame.';
+    await loadPhotos();
+    showTab('library');
+  } catch (e) {
+    toast('Upload failed: ' + e.message, true);
+  } finally {
+    button.textContent = 'Send to the frame';
+    button.disabled = !lastResult;
+  }
+});
+
+/* ------------------------------------------------------------------ boot */
+if (RESTRICTED_BROWSER) {
+  const note = document.createElement('div');
+  note.className = 'escape';
+  note.innerHTML = ESCAPE_HTML;
+  $('#viewAdd').prepend(note);
+}
+
+loadPhotos();
+})();
+</script>

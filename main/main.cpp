@@ -1,19 +1,23 @@
 /*
- * M5Stack PaperColor - simple USB-fed photo frame.
+ * M5Stack PaperColor - USB-fed, button-advanced photo frame with an on-device
+ * photo manager.
  *
- * Boot flow:
- *   - If a USB host is present, expose the internal flash as a USB drive
- *     (mass storage) so photos can be dragged onto it, and stay in that mode
- *     until the host disconnects.
- *   - Otherwise (woken by the power button, or a fresh power-on with no USB
- *     attached), leave the current photo on the panel and wait for the side
- *     keys to step through the photos, then power off when idle.
+ * Three modes, one at a time. They are exclusive because the FAT volume has a
+ * single owner: it is either exported to a USB host as a mass-storage device,
+ * or mounted by the app, never both.
+ *
+ *   DRIVE      USB power present at boot: expose the internal flash as a USB
+ *              drive so photos can be dragged onto it, until the cable goes.
+ *   SLIDESHOW  Otherwise: leave the current photo on the panel and wait for
+ *              the side keys to step through the photos, then power off.
+ *   AP         Top key from either of the above: raise a Wi-Fi hotspot and
+ *              serve the photo manager, so photos can be prepared and added
+ *              from a phone with no computer involved.
  *
  * This app is a purpose-built replacement for the official
  * M5PaperColor-UserDemo's main.cpp / app_manager / app_server: it reuses the
- * demo's hal/ and local_photo_slideshow app classes as-is, but wires them
- * together for a single-purpose photo frame instead of the demo's full
- * menu/cloud-sync system.
+ * demo's hal/ and local_photo_slideshow app classes, but wires them together
+ * for a single-purpose photo frame instead of the demo's menu/cloud system.
  */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,6 +28,7 @@
 #include "hal/hal.h"
 #include "hal/storage/hal_storage.h"
 #include "apps/local_photo_slideshow/local_photo_slideshow.h"
+#include "net/ap_mode.h"
 
 using namespace hal_wifi;
 Hal hal;
@@ -43,7 +48,8 @@ constexpr int      USB_VIN_POLL_MS    = 250;
 
 // After waking, how long the device stays awake waiting for the side keys
 // (upper = previous, lower = next) before powering itself off. Each press
-// restarts the timer.
+// restarts the timer. Hotspot mode has its own, far longer window; see
+// AP_IDLE_MS in main/net/ap_mode.cpp.
 constexpr uint32_t INTERACTIVE_IDLE_MS = 120000;
 
 bool usbPowerPresent()
@@ -63,20 +69,38 @@ void showNoPhotosPlaceholder()
     hal.Canvas->setTextColor(TFT_BLACK);
     hal.Canvas->setTextDatum(textdatum_t::middle_center);
     hal.Canvas->setTextSize(2);
-    hal.Canvas->drawString("Connect via USB", hal.Canvas->width() / 2, hal.Canvas->height() / 2 - 16);
-    hal.Canvas->drawString("to add photos", hal.Canvas->width() / 2, hal.Canvas->height() / 2 + 16);
+    hal.Canvas->drawString("No photos yet", hal.Canvas->width() / 2, hal.Canvas->height() / 2 - 32);
+    hal.Canvas->drawString("Connect via USB, or press the", hal.Canvas->width() / 2, hal.Canvas->height() / 2);
+    hal.Canvas->drawString("top key to add them from a phone", hal.Canvas->width() / 2,
+                           hal.Canvas->height() / 2 + 32);
     hal.Canvas->pushSprite(0, 0);
 }
 
-// Runs the USB mass-storage "drive" mode until the cable is unplugged.
-// Ejecting the drive on the host side is not the exit condition: the host may
-// eject and re-mount, and a plain charger keeps VIN up without ever mounting.
-// The device simply stays a drive for as long as it has USB power.
-void runUsbDriveMode()
+// Why runUsbDriveMode() returned.
+enum class DriveExit {
+    PowerRemoved,  // the cable went; carry on to the slideshow or power off
+    TopKey,        // open the hotspot instead
+};
+
+// Runs the USB mass-storage "drive" mode until the cable is unplugged or the
+// top key asks for the hotspot. Ejecting the drive on the host side is not an
+// exit condition: the host may eject and re-mount, and a plain charger keeps
+// VIN up without ever mounting. The device simply stays a drive for as long as
+// it has USB power.
+DriveExit runUsbDriveMode()
 {
+    // A hotspot session detaches the device from USB to take the FAT volume
+    // for itself, so coming back here needs the driver re-installed first or
+    // the drive never reappears on the host.
+    if (!hal_storage_usb_attached()) hal_storage_usb_attach();
     storage_mount_to_usb();
     bool was_mounted = false;
     while (usbPowerPresent()) {
+        M5.update();
+        if (M5.BtnC.wasPressed()) {
+            ESP_LOGI("main", "Top key pressed, leaving drive mode for the hotspot");
+            return DriveExit::TopKey;
+        }
         bool mounted = tud_mounted();
         if (mounted != was_mounted) {
             ESP_LOGI("main", "USB host %s", mounted ? "mounted the drive" : "not mounted");
@@ -86,6 +110,7 @@ void runUsbDriveMode()
     }
     ESP_LOGI("main", "USB power removed, leaving drive mode");
     storage_mount_to_app();
+    return DriveExit::PowerRemoved;
 }
 
 // Polls the A/B/C keys for `window_ms`, logging the raw GPIO levels whenever
@@ -107,6 +132,14 @@ bool waitForKeyPress(uint32_t window_ms)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     return pressed;
+}
+
+[[noreturn]] void powerOffForever()
+{
+    hal.powerOff();
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
 
 }  // namespace
@@ -133,37 +166,54 @@ extern "C" void app_main(void)
         key_held = waitForKeyPress(2000);
     }
 
-    if (usb_at_boot && !key_held) {
-        ESP_LOGI("main", "Entering USB drive mode");
-        runUsbDriveMode();
-        // Photos may have just been added/removed; power off without
-        // advancing the slideshow since no button was pressed.
-        hal.powerOff();
-        while (1) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-    }
-
     static PhotoSlideshow slideshow;
     slideshow.init(PHOTO_DIR);
+
+    if (usb_at_boot && !key_held) {
+        ESP_LOGI("main", "Entering USB drive mode");
+        if (runUsbDriveMode() == DriveExit::TopKey) {
+            // Hotspot mode owns the filesystem from here; it redraws the panel
+            // on its way out, so there is nothing left to show afterwards.
+            slideshow.resume();
+            net::runApMode(slideshow);
+        }
+        // Photos may have just been added or removed; power off without
+        // advancing the slideshow since no side key was pressed.
+        powerOffForever();
+    }
+
     if (slideshow.getTotal() == 0) {
+        // Still worth staying awake: the top key can add the first photo.
         showNoPhotosPlaceholder();
     } else {
         // The panel still shows the last photo (e-paper keeps its image with
         // the power off), so waking does not redraw anything. Photos only
         // change on an explicit key press: upper side key = previous, lower
-        // side key = next. On battery, plugging in USB during the window drops
-        // straight into drive mode.
+        // side key = next. On battery, plugging in USB drops into drive mode.
         slideshow.resume();
-        slideshow.runInteractive(INTERACTIVE_IDLE_MS, usb_at_boot ? nullptr : usbPowerPresent);
-        if (!usb_at_boot && usbPowerPresent()) {
-            ESP_LOGI("main", "USB power present, entering drive mode");
-            runUsbDriveMode();
-        }
     }
 
-    hal.powerOff();
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+    // One interactive window per wake, except that opening the hotspot and
+    // dismissing it hands control back rather than powering off: having gone
+    // to the trouble of adding photos, you want to look at them.
+    while (true) {
+        InteractiveExit exit =
+            slideshow.runInteractive(INTERACTIVE_IDLE_MS, usb_at_boot ? nullptr : usbPowerPresent);
+
+        if (exit == InteractiveExit::TopKey) {
+            net::runApMode(slideshow);
+            continue;
+        }
+
+        if (exit == InteractiveExit::Aborted && !usb_at_boot && usbPowerPresent()) {
+            ESP_LOGI("main", "USB power present, entering drive mode");
+            if (runUsbDriveMode() == DriveExit::TopKey) {
+                net::runApMode(slideshow);
+                continue;
+            }
+        }
+        break;
     }
+
+    powerOffForever();
 }

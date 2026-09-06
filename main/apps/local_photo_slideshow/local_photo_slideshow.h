@@ -14,6 +14,15 @@
 #include "freertos/task.h"
 
 /**
+ * @brief Why runInteractive() returned.
+ */
+enum class InteractiveExit {
+    Idle,     /*!< idle_ms elapsed with no interaction */
+    Aborted,  /*!< abort_cb asked to stop (USB power appeared) */
+    TopKey,   /*!< the top-edge key was pressed; the caller opens the hotspot */
+};
+
+/**
  * @brief Photo slideshow mode controller.
  */
 class PhotoSlideshow {
@@ -107,14 +116,40 @@ public:
      *
      * Button A (G10, upper side key) steps up the list to the previous photo,
      * button B (G9, lower side key) steps down to the next. Button C (G1, top
-     * edge) is reserved. Each press restarts the idle timer; the function
-     * returns once idle_ms passes with no interaction, or as soon as abort_cb
-     * (if given) returns true.
+     * edge) ends the window immediately and reports InteractiveExit::TopKey,
+     * which main.cpp turns into the Wi-Fi hotspot. Each press restarts the
+     * idle timer; the function returns once idle_ms passes with no
+     * interaction, or as soon as abort_cb (if given) returns true.
      *
      * @param idle_ms Idle time after the last interaction before returning.
      * @param abort_cb Optional predicate polled each loop; true ends the window early.
+     * @return Why the window ended.
      */
-    void runInteractive(uint32_t idle_ms, bool (*abort_cb)() = nullptr);
+    InteractiveExit runInteractive(uint32_t idle_ms, bool (*abort_cb)() = nullptr);
+
+    /**
+     * @brief Rescans, then draws the photo at `index` and remembers it.
+     *
+     * The position is written to the RTC's battery-backed RAM like a button
+     * press would, so a photo chosen from the web app is still the current one
+     * after the frame powers off.
+     *
+     * @param index Zero-based index into the name-sorted photo list.
+     * @return True if a photo was drawn.
+     */
+    bool showIndex(uint16_t index);
+
+    /**
+     * @brief Rescans the directory and redraws the photo at the current index.
+     *
+     * Used on the way out of hotspot mode, where the panel is showing the
+     * Wi-Fi credentials rather than a photo and the file list may have changed
+     * underneath: photos can have been added, deleted or reordered while the
+     * web app was up. Costs a full panel refresh.
+     *
+     * @return True if a photo was drawn, false if the directory is now empty.
+     */
+    bool redrawCurrent();
 
     /**
      * @brief Returns the number of discovered images.

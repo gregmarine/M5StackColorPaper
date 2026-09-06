@@ -260,7 +260,7 @@ bool PhotoSlideshow::resume()
     return true;
 }
 
-void PhotoSlideshow::runInteractive(uint32_t idle_ms, bool (*abort_cb)())
+InteractiveExit PhotoSlideshow::runInteractive(uint32_t idle_ms, bool (*abort_cb)())
 {
     // Short settle so a quick double-press skips two photos with one refresh
     // instead of paying for two 15-30 s panel refreshes.
@@ -271,16 +271,20 @@ void PhotoSlideshow::runInteractive(uint32_t idle_ms, bool (*abort_cb)())
     while (millis_() - last_activity < idle_ms) {
         if (abort_cb && abort_cb()) {
             ESP_LOGI(TAG, "Interactive window aborted");
-            return;
+            return InteractiveExit::Aborted;
         }
 
         M5.update();
         // M5Unified maps the PaperColor keys as A = G10 (upper side key),
         // B = G9 (lower side key), C = G1 (top edge). Upper key moves up the
-        // list, lower key moves down it. C is reserved and does nothing.
+        // list, lower key moves down it. C hands control back to main.cpp,
+        // which raises the Wi-Fi hotspot.
         bool up   = M5.BtnA.wasPressed();
         bool down = M5.BtnB.wasPressed();
-        M5.BtnC.wasPressed();  // consume so it can't be mistaken for a stale press later
+        if (M5.BtnC.wasPressed()) {
+            ESP_LOGI(TAG, "Top key pressed, leaving the interactive window");
+            return InteractiveExit::TopKey;
+        }
         if (up) {
             prev();
             last_activity = millis_();
@@ -307,6 +311,41 @@ void PhotoSlideshow::runInteractive(uint32_t idle_ms, bool (*abort_cb)())
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     ESP_LOGI(TAG, "Interactive window idle for %lu ms, leaving", (unsigned long)idle_ms);
+    return InteractiveExit::Idle;
+}
+
+bool PhotoSlideshow::showIndex(uint16_t index)
+{
+    if (!rescanAndClamp()) {
+        ESP_LOGW(TAG, "Show: no photos to show");
+        return false;
+    }
+    if (index >= _photo_list.size()) index = (uint16_t)(_photo_list.size() - 1);
+
+    ESP_LOGI(TAG, "Showing [%d/%d]: %s", index + 1, (int)_photo_list.size(),
+             _photo_list[index].c_str());
+    _pending_index = index;
+    hal.rx8130RamWrite(RX8130_RAM_INDEX_CURRENT, (uint8_t)(index & 0xFF));
+    hal.rx8130RamWrite(RX8130_RAM_INDEX_CURRENT + 1, (uint8_t)((index >> 8) & 0xFF));
+
+    displayPhoto(index);
+    _current_index   = index;
+    _needs_refresh   = false;
+    _last_refresh_ms = millis_();
+    return true;
+}
+
+bool PhotoSlideshow::redrawCurrent()
+{
+    if (_photo_list.empty() && !rescanAndClamp()) {
+        ESP_LOGW(TAG, "Redraw: no photos to show");
+        return false;
+    }
+    // resume() leaves _pending_index at NO_PHOTO when nothing has been shown
+    // yet; there is still a list, so start at the top of it. A reorder while
+    // the hotspot was up can also have moved things, but the index is
+    // positional by design -- it follows the slot, not the photo.
+    return showIndex(_pending_index == NO_PHOTO ? 0 : _pending_index);
 }
 
 void PhotoSlideshow::toggleRotation()

@@ -619,6 +619,40 @@ void storage_mount_to_app(void)
     hal_storage_unlock();
 }
 
+/* Added for the photo-frame firmware: not present upstream. Goes through the
+ * same install/uninstall helpers as the rest of this file so s_ctx stays
+ * truthful; calling tinyusb_driver_uninstall() directly would leave
+ * driver_installed set and the next attach would be skipped. */
+esp_err_t hal_storage_usb_detach(void)
+{
+    storage_mount_to_app();
+    hal_storage_lock();
+    esp_err_t ret = uninstall_tinyusb_device_driver();
+    hal_storage_unlock();
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "USB detached; the volume belongs to the app");
+    } else {
+        ESP_LOGE(TAG, "USB detach failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
+}
+
+esp_err_t hal_storage_usb_attach(void)
+{
+    hal_storage_lock();
+    esp_err_t ret = install_tinyusb_device_driver();
+    hal_storage_unlock();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "USB attach failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
+}
+
+bool hal_storage_usb_attached(void)
+{
+    return s_ctx.driver_installed;
+}
+
 /* Added for the photo-frame firmware: not present upstream. */
 void storage_mount_to_usb(void)
 {
