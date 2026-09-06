@@ -63,6 +63,12 @@ For anything involving the hotspot, note that entering it detaches USB, so
 the drive disappears and the serial console comes back — which makes it the
 one mode whose logs can be watched over the cable.
 
+If the web app is unreachable from an Android phone, it is almost certainly
+the "stay connected to a network with no internet?" prompt going unanswered,
+not the firmware. Android will not route the browser to the frame until that
+is accepted, and the notification is silent on Do Not Disturb. The panel says
+so; `docs/webapp.md` explains why it cannot be avoided.
+
 ## Photo pipeline conventions
 
 - Output is always a 4-bit indexed BMP whose palette is `PANEL_PALETTE` (the
