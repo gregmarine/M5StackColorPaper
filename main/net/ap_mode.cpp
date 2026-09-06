@@ -125,8 +125,19 @@ void drawApScreen(const ApInfo& info)
 
     hal.Canvas->setTextDatum(textdatum_t::middle_center);
     hal.Canvas->setTextSize(2);
-    hal.Canvas->drawString("It should open by itself once you join.", cx, h - 74);
-    hal.Canvas->drawString("Top key again to finish.", cx, h - 42);
+    // Nothing opens on its own -- the frame passes the phone's connectivity
+    // checks rather than posing as a captive portal, because a phone that
+    // thinks it needs to sign in will not route the browser here at all.
+    //
+    // Android still notices there is no internet behind the hotspot and asks
+    // whether to stay connected. Until that is answered the browser cannot
+    // reach the frame, and the prompt is easy to miss entirely if the phone
+    // is on Do Not Disturb -- which is exactly how this was found. It is a
+    // once-per-phone answer, but the one time it happens it looks like the
+    // frame is broken, so it goes on the panel rather than in the docs.
+    hal.Canvas->drawString("Android: if it asks whether to stay connected", cx, h - 104);
+    hal.Canvas->drawString("to a network with no internet, say yes.", cx, h - 76);
+    hal.Canvas->drawString("Top key again to finish.", cx, h - 40);
 
     hal.Canvas->pushSprite(0, 0);
 }

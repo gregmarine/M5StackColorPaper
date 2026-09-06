@@ -25,6 +25,9 @@ Wi-Fi AP "PaperColor-XXXX"  (WPA2)     <-- credentials drawn on the panel
    while it is still painting — a colour refresh takes 15–30 s.
 3. Join that network from your phone, then open `http://192.168.4.1` in
    Chrome or Safari. Nothing pops up on its own, on purpose — see below.
+   **On Android, answer the "stay connected to a network with no internet?"
+   prompt first**, or the browser cannot reach the frame at all. It is a
+   once-per-phone answer and it is easy to miss on Do Not Disturb.
 4. **Library** lists what is on the frame: tap *Show* to draw one, the arrows
    to reorder, *Delete* to remove one. **Add photo** picks a photo, prepares
    it, and sends it.
@@ -54,14 +57,30 @@ is dead in it: tapping *Choose photo* does nothing, with no error. Hijacking
 the probes therefore costs the only browser that can do the job, to gain a
 window that cannot.
 
-Passing the probes makes the phone treat the hotspot as an ordinary working
-network, keep it as the default route, and stop nagging about it. Chrome and
-Safari reach the frame normally and everything works.
+Passing the probes gets iOS the whole way there: it validates the network and
+routes to the frame with nothing further asked.
+
+Android goes one step further than iOS and validates over **HTTPS**
+(`https://www.google.com/generate_204`), which no amount of cooperation from
+the frame can satisfy — that would need a valid certificate for a domain we do
+not own. So Android concludes the hotspot has no internet and asks whether to
+stay connected. **Until that prompt is answered, Android keeps mobile data as
+the default route and the browser cannot reach `192.168.4.1` at all.**
+
+That prompt is the single most likely thing to go wrong, and it does not look
+like a network problem — it looks like the frame is broken. It is easy to miss
+entirely with Do Not Disturb on. So the panel says so, next to the password.
+Answering it once per phone is enough.
 
 The cost is discovery: nothing opens on its own, so you go to
 `http://192.168.4.1` yourself. The panel prints it every time you open the
 hotspot, and bookmarking it or adding it to your home screen makes it one tap
 after the first time.
+
+Worth being explicit about the alternative, since it looks tempting: bringing
+the captive portal back would restore the pop-up and break adding photos. The
+sign-in window is the *only* thing Android routes to such a network, and it is
+a WebView with no file chooser.
 
 DNS still answers every query with the frame's address — that is how the
 probes reach us to be answered at all — so browsing to any other site while
