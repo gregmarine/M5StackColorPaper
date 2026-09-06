@@ -50,16 +50,13 @@ esp_err_t sendApp(httpd_req_t* req)
     return httpd_resp_send(req, reinterpret_cast<const char*>(app_html_gz_start), len);
 }
 
-// Served to the captive-portal window instead of the real app.
+// Shown when a browser reaches the frame under some other hostname.
 //
-// That window is not a browser in any useful sense: Android's is a WebView
-// whose host app implements no file chooser, so the photo picker is simply
-// dead, and iOS's suppresses dialogs. Rendering the manager there produces an
-// app where half the buttons quietly do nothing. So the portal gets this
-// instead -- a signpost, deliberately trivial enough to survive any WebView,
-// with the address big enough to read and type if the button does not launch
-// anything.
-constexpr const char* PORTAL_LANDING_HTML = R"HTML(<!doctype html>
+// Every DNS query on this network is answered with the frame's address (that
+// is how the connectivity probes below reach us at all), so browsing to any
+// site while connected lands here. Saying so, with the real address, is more
+// use than silently serving the photo manager under a name that is not it.
+constexpr const char* SIGNPOST_HTML = R"HTML(<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PaperColor</title>
@@ -78,64 +75,85 @@ constexpr const char* PORTAL_LANDING_HTML = R"HTML(<!doctype html>
 </style>
 <div class="card">
   <h1>PaperColor photo manager</h1>
-  <p>You&rsquo;re connected. Open the manager in your normal browser.</p>
-  <a class="go" href="http://192.168.4.1/" target="_blank" rel="noopener">Open the photo manager</a>
+  <p>You&rsquo;re connected to the frame. There is no internet on this network.</p>
+  <a class="go" href="http://192.168.4.1/">Open the photo manager</a>
   <div class="addr">http://192.168.4.1</div>
-  <p class="note">This Wi-Fi sign-in window can&rsquo;t open your photo library,
-  so the manager runs in Chrome or Safari instead. If the button does nothing,
-  type the address above.</p>
+  <p class="note">Bookmark that address, or add it to your home screen, to come
+  straight here next time.</p>
 </div>
 )HTML";
 
-// The captive-portal window announces itself: iOS's browser carries
-// CaptiveNetworkSupport, and Android's is a stock WebView, which is what the
-// "; wv" marker means.
-bool isRestrictedBrowser(httpd_req_t* req)
-{
-    const size_t len = httpd_req_get_hdr_value_len(req, "User-Agent");
-    if (len == 0 || len > 512) return false;
-    char agent[513] = {};
-    if (httpd_req_get_hdr_value_str(req, "User-Agent", agent, sizeof(agent)) != ESP_OK) {
-        return false;
-    }
-    return std::strstr(agent, "CaptiveNetworkSupport") != nullptr ||
-           std::strstr(agent, "; wv)") != nullptr ||
-           std::strstr(agent, "; wv;") != nullptr;
-}
+// Apple's probe passes only on exactly this body.
+constexpr const char* APPLE_SUCCESS_HTML =
+    "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>";
 
-esp_err_t sendPortalLanding(httpd_req_t* req)
+// True when the request was addressed to the frame itself rather than to some
+// site the DNS responder redirected here.
+bool addressedToDevice(httpd_req_t* req)
 {
-    touch();
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, PORTAL_LANDING_HTML, HTTPD_RESP_USE_STRLEN);
+    const size_t len = httpd_req_get_hdr_value_len(req, "Host");
+    if (len == 0 || len > 128) return true;  // no Host: assume direct
+    char host[129] = {};
+    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK) return true;
+    return std::strncmp(host, "192.168.4.1", 11) == 0;
 }
 
 esp_err_t rootHandler(httpd_req_t* req)
 {
-    // The portal window follows its redirect to "/" too, so the check has to
-    // be here and not only on the probe URLs.
-    if (isRestrictedBrowser(req)) return sendPortalLanding(req);
+    touch();
+    if (!addressedToDevice(req)) {
+        httpd_resp_set_type(req, "text/html");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        return httpd_resp_send(req, SIGNPOST_HTML, HTTPD_RESP_USE_STRLEN);
+    }
     return sendApp(req);
 }
 
-// Phones decide they are behind a captive portal by fetching a known URL and
-// checking they get exactly what they expected. Answering these with anything
-// else is what makes the sign-in window open on its own -- which is worth
-// keeping purely for discovery, since it is how you find the address without
-// reading it off the panel. What it gets is the signpost, not the app.
-esp_err_t portalRedirectHandler(httpd_req_t* req)
+// The connectivity probes are ANSWERED, not hijacked, and that is the whole
+// point rather than an oversight.
+//
+// A phone that concludes it is behind a captive portal does not make the
+// network its default route: on Android everything except the sign-in WebView
+// keeps using mobile data, so Chrome cannot reach 192.168.4.1 at all. The
+// sign-in window that a hijack produces is useless anyway -- it is a WebView
+// with no file chooser, so the photo picker is dead in it. Hijacking the
+// probes therefore costs the only browser that can actually do the job, to
+// gain a window that cannot.
+//
+// Passing the probes makes the phone treat the hotspot as an ordinary working
+// network, keep it as the default route, and stop nagging. There is genuinely
+// no internet behind it, so every other site lands on the signpost above; the
+// frame's address is on the panel, and worth bookmarking.
+esp_err_t androidProbeHandler(httpd_req_t* req)
 {
-    return sendPortalLanding(req);
+    httpd_resp_set_status(req, "204 No Content");
+    return httpd_resp_send(req, nullptr, 0);
 }
 
-// Anything not otherwise routed. Unknown URLs are almost always a phone
-// probing for a captive portal, so they get redirected to the app.
+esp_err_t appleProbeHandler(httpd_req_t* req)
+{
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, APPLE_SUCCESS_HTML, HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t windowsConnectHandler(httpd_req_t* req)
+{
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_send(req, "Microsoft Connect Test", HTTPD_RESP_USE_STRLEN);
+}
+
+esp_err_t windowsNcsiHandler(httpd_req_t* req)
+{
+    httpd_resp_set_type(req, "text/plain");
+    return httpd_resp_send(req, "Microsoft NCSI", HTTPD_RESP_USE_STRLEN);
+}
+
+// Anything not otherwise routed.
 //
-// API paths are the exception and must not be: httpd_resp_send_err() routes
-// through here, so an honest 404 from the photo API ("no such photo") would
-// otherwise reach the web app as a 302 to the index page, and fetch() would
-// report a baffling HTML-parsing failure instead of the real error.
+// API paths must report honestly: httpd_resp_send_err() routes through here,
+// so a real 404 from the photo API ("no such photo") would otherwise reach the
+// web app as something else entirely and fetch() would report a baffling
+// parse failure instead of the actual error.
 esp_err_t notFoundHandler(httpd_req_t* req, httpd_err_code_t /*err*/)
 {
     if (std::strncmp(req->uri, "/api/", 5) == 0 || std::strncmp(req->uri, "/photo/", 7) == 0) {
@@ -143,20 +161,20 @@ esp_err_t notFoundHandler(httpd_req_t* req, httpd_err_code_t /*err*/)
         httpd_resp_set_type(req, "text/plain");
         return httpd_resp_send(req, "not found", HTTPD_RESP_USE_STRLEN);
     }
-    return portalRedirectHandler(req);
+    return rootHandler(req);
 }
 
 const httpd_uri_t URIS[] = {
     {.uri = "/", .method = HTTP_GET, .handler = rootHandler, .user_ctx = nullptr},
     // Android
-    {.uri = "/generate_204", .method = HTTP_GET, .handler = portalRedirectHandler, .user_ctx = nullptr},
-    {.uri = "/gen_204", .method = HTTP_GET, .handler = portalRedirectHandler, .user_ctx = nullptr},
+    {.uri = "/generate_204", .method = HTTP_GET, .handler = androidProbeHandler, .user_ctx = nullptr},
+    {.uri = "/gen_204", .method = HTTP_GET, .handler = androidProbeHandler, .user_ctx = nullptr},
     // iOS / macOS
-    {.uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = portalRedirectHandler, .user_ctx = nullptr},
-    {.uri = "/library/test/success.html", .method = HTTP_GET, .handler = portalRedirectHandler, .user_ctx = nullptr},
+    {.uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = appleProbeHandler, .user_ctx = nullptr},
+    {.uri = "/library/test/success.html", .method = HTTP_GET, .handler = appleProbeHandler, .user_ctx = nullptr},
     // Windows
-    {.uri = "/connecttest.txt", .method = HTTP_GET, .handler = portalRedirectHandler, .user_ctx = nullptr},
-    {.uri = "/ncsi.txt", .method = HTTP_GET, .handler = portalRedirectHandler, .user_ctx = nullptr},
+    {.uri = "/connecttest.txt", .method = HTTP_GET, .handler = windowsConnectHandler, .user_ctx = nullptr},
+    {.uri = "/ncsi.txt", .method = HTTP_GET, .handler = windowsNcsiHandler, .user_ctx = nullptr},
 };
 
 }  // namespace

@@ -153,11 +153,11 @@
 'use strict';
 const $ = s => document.querySelector(s);
 
-// Both platforms open a captive portal in a stripped-down browser, and neither
-// can do what this app needs. Android's is a plain WebView whose host app does
-// not implement a file chooser, so tapping "Choose photo" does nothing at all;
-// iOS's additionally suppresses dialogs. Detect it and say so up front rather
-// than letting a dead button be the first sign.
+// The frame passes the phone's connectivity checks, so no sign-in window
+// should open and this app should normally be running in a real browser. Some
+// in-app browsers are still stripped-down WebViews that cannot open a file
+// picker, though, so keep a quiet note rather than letting a dead button be
+// the first sign.
 //
 //   CaptiveNetworkSupport  iOS's captive-portal browser identifies itself
 //   "; wv"                 the standard Android WebView marker
@@ -165,9 +165,8 @@ const RESTRICTED_BROWSER =
   /CaptiveNetworkSupport/i.test(navigator.userAgent) || /;\s*wv[;)]/i.test(navigator.userAgent);
 
 const ESCAPE_HTML =
-  'You are in the Wi-Fi sign-in window, which cannot open your photo library. ' +
-  '<a href="http://192.168.4.1/" target="_blank" rel="noopener">Open http://192.168.4.1</a> ' +
-  'in Chrome or Safari to add photos. Everything else here works either way.';
+  'If choosing a photo does nothing, this browser cannot open your photo library. ' +
+  'Open <a href="http://192.168.4.1/">http://192.168.4.1</a> in Chrome or Safari.';
 
 let photos = [];          // [{name, bytes}] in the frame's display order
 let orderDirty = false;
@@ -410,10 +409,10 @@ async function pollRefresh() {
     await new Promise(r => setTimeout(r, 1500));
     try {
       const s = await (await api('/api/status')).json();
-      if (!s.refreshing && !s.showQueued) { banner(RESTRICTED_BROWSER ? ESCAPE_HTML : ''); return; }
+      if (!s.refreshing && !s.showQueued) { banner(''); return; }
     } catch (e) { /* the radio is busy during a refresh; keep waiting */ }
   }
-  banner(RESTRICTED_BROWSER ? ESCAPE_HTML : '');
+  banner('');
 }
 
 /* ------------------------------------------------------------------- add */
@@ -553,13 +552,10 @@ $('#upload').addEventListener('click', async () => {
 
 /* ------------------------------------------------------------------ boot */
 if (RESTRICTED_BROWSER) {
-  banner(ESCAPE_HTML);
   const note = document.createElement('div');
   note.className = 'escape';
   note.innerHTML = ESCAPE_HTML;
   $('#viewAdd').prepend(note);
-  $('#addHint').textContent =
-    'If nothing happens when you tap Choose photo, use the link above.';
 }
 
 loadPhotos();

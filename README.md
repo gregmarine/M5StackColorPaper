@@ -20,8 +20,8 @@ frame's own Wi-Fi hotspot from a phone with no computer involved.
   itself off.
 - Press the key on the top edge (G1): the frame raises a WPA2 Wi-Fi hotspot
   and draws the network name, password and address on the panel. Join it from
-  a phone and a web app opens where you can prepare and add photos, reorder
-  or delete them, and pick which one the frame shows. See
+  a phone, open that address, and you get a web app where you can prepare and
+  add photos, reorder or delete them, and pick which one the frame shows. See
   [`docs/webapp.md`](docs/webapp.md).
 
 Photo changes are always button-driven, never automatic - the panel takes

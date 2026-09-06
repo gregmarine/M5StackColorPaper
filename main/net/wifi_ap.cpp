@@ -150,11 +150,12 @@ esp_err_t apStart(ApInfo& out)
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
     esp_wifi_set_max_tx_power(52);  // 13 dBm, in 0.25 dBm units
 
-    // RFC 8910: hands the portal URL to the phone over DHCP, which modern iOS
-    // and Android prefer over guessing from a hijacked probe request.
-    const char* portal_uri = "http://192.168.4.1";
-    esp_netif_dhcps_option(s_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI,
-                           const_cast<char*>(portal_uri), std::strlen(portal_uri));
+    // Deliberately no RFC 8910 captive-portal DHCP option. Announcing a portal
+    // makes the phone treat this as a network that needs signing in to, and a
+    // phone in that state does not route ordinary traffic here -- on Android
+    // everything except the sign-in WebView keeps using mobile data, so the
+    // browser cannot reach the frame at all. See the probe handlers in
+    // web_server.cpp.
 
     s_running = true;
     ESP_LOGI(TAG, "AP up: ssid=%s pass=%s at %s", out.ssid.c_str(), out.password.c_str(),

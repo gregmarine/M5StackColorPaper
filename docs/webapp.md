@@ -10,10 +10,11 @@ top key
    v
 Wi-Fi AP "PaperColor-XXXX"  (WPA2)     <-- credentials drawn on the panel
    |
-   +-- DNS: every name -> 192.168.4.1   (captive portal)
+   +-- DNS: every name -> 192.168.4.1
    +-- HTTP on 192.168.4.1
          /            the web app
          /api/*       photos, storage, ordering
+         probes       answered truthfully, so the phone routes here
 ```
 
 ## Using it
@@ -22,8 +23,8 @@ Wi-Fi AP "PaperColor-XXXX"  (WPA2)     <-- credentials drawn on the panel
 2. The panel redraws with the network name, password and `http://192.168.4.1`.
    The access point is already up before the redraw starts, so you can join
    while it is still painting — a colour refresh takes 15–30 s.
-3. Join that network from your phone. The app should open by itself; if not,
-   open `http://192.168.4.1`.
+3. Join that network from your phone, then open `http://192.168.4.1` in
+   Chrome or Safari. Nothing pops up on its own, on purpose — see below.
 4. **Library** lists what is on the frame: tap *Show* to draw one, the arrows
    to reorder, *Delete* to remove one. **Add photo** picks a photo, prepares
    it, and sends it.
@@ -33,35 +34,39 @@ Wi-Fi AP "PaperColor-XXXX"  (WPA2)     <-- credentials drawn on the panel
 The credentials are generated once and kept in NVS, so they never change and
 your phone will rejoin on its own after the first time.
 
-### The sign-in window is a signpost, not the app
+### There is deliberately no captive portal
 
-Joining the network pops up the phone's Wi-Fi sign-in window. That window
-deliberately does **not** get the photo manager. It gets a small page with the
-address and an *Open the photo manager* button, and that is all.
+Joining the hotspot does **not** pop up a Wi-Fi sign-in window. The frame
+answers the phone's connectivity probes truthfully — a real `204` to Android's
+`/generate_204`, Apple's expected `Success` body, and the two Windows strings
+— and advertises no RFC 8910 portal URI. The phone concludes the network is
+fine and stops there.
 
-The reason is that the sign-in window is not a browser in any useful sense:
+That looks backwards for a device with no internet, and it is the single most
+important thing about this page.
 
-- **Android's** is a stock WebView whose host app implements no file chooser,
-  so the photo picker is simply dead — tapping *Choose photo* does nothing at
-  all, with no error.
-- **iOS's** additionally suppresses `confirm()` and friends: the dialog never
-  appears and the call reports "cancelled", so anything gated behind one
-  silently does nothing.
+A phone that decides it is behind a captive portal **does not make that
+network its default route**. On Android, everything except the sign-in WebView
+carries on using mobile data, so Chrome cannot reach `192.168.4.1` at all —
+the address simply never loads. The sign-in window it gives you instead is a
+stock WebView whose host app implements no file chooser, so the photo picker
+is dead in it: tapping *Choose photo* does nothing, with no error. Hijacking
+the probes therefore costs the only browser that can do the job, to gain a
+window that cannot.
 
-Rendering the real app there produces a manager where half the controls
-quietly fail, which is worse than not offering it. So the portal is kept for
-discovery — it is how you find the address without reading it off the panel —
-and the app itself runs in Chrome or Safari, where everything works.
+Passing the probes makes the phone treat the hotspot as an ordinary working
+network, keep it as the default route, and stop nagging about it. Chrome and
+Safari reach the frame normally and everything works.
 
-The frame recognises that window from the `User-Agent`
-(`CaptiveNetworkSupport` on iOS, the `; wv` WebView marker on Android) and
-serves the signpost to it, at `/` as well as at the probe URLs, since the
-window follows its own redirect. The web app carries the same check as a
-fallback for in-app browsers that are not captive portals.
+The cost is discovery: nothing opens on its own, so you go to
+`http://192.168.4.1` yourself. The panel prints it every time you open the
+hotspot, and bookmarking it or adding it to your home screen makes it one tap
+after the first time.
 
-If the button does not launch anything, type `http://192.168.4.1` into your
-browser. Bookmarking it, or adding it to your home screen, skips all of this
-next time.
+DNS still answers every query with the frame's address — that is how the
+probes reach us to be answered at all — so browsing to any other site while
+connected lands on a small page saying where the manager actually is, rather
+than on the manager under someone else's hostname.
 
 ## What runs where
 
@@ -129,7 +134,7 @@ the WPA2 key.
 
 | Method | Path | Does |
 |--------|------|------|
-| GET | `/` | the web app (gzipped, from flash), or the signpost page for a captive-portal browser |
+| GET | `/` | the web app (gzipped, from flash); a signpost if the `Host` is not the frame |
 | GET | `/api/photos` | `{"photos":[{"name","bytes"}]}`, in display order |
 | POST | `/api/photos?name=X.bmp` | upload; the **raw BMP is the body** |
 | DELETE | `/api/photos/X.bmp` | remove one |
@@ -168,7 +173,7 @@ error rather than filling the volume.
 
 ```
 main/net/wifi_ap.cpp     soft AP, credential generation and NVS persistence
-main/net/web_server.cpp  esp_http_server, the signpost page, captive-portal probes
+main/net/web_server.cpp  esp_http_server, connectivity probes, the signpost page
 main/net/photo_api.cpp   the /api endpoints, all FAT access under the lock
 main/net/ap_mode.cpp     the session: panel screen, idle timers, queued refreshes
 main/web/app.ui.html     the mobile UI (pipeline spliced in at build time)
